@@ -19,7 +19,7 @@ A lightweight, zero-impact Git utility designed for [Claude Code](https://claude
 ### One-Line Install (with Auto-Save)
 
 ```bash
-git clone https://github.com/yourusername/timeline.git ~/Downloads/repos/timeline && cd ~/Downloads/repos/timeline && ./install.sh
+git clone https://github.com/teamchong/timeline.git && cd timeline && ./install.sh
 ```
 
 This will:
@@ -33,11 +33,11 @@ After installation, Timeline will automatically save snapshots whenever you edit
 ### Manual Install
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/timeline.git ~/Downloads/repos/timeline
+# Clone the repository to your preferred location
+git clone https://github.com/teamchong/timeline.git /path/to/timeline
 
 # Run the installer
-cd ~/Downloads/repos/timeline
+cd /path/to/timeline
 ./install.sh
 ```
 
@@ -54,7 +54,7 @@ Installation options for the command:
 ### Uninstall
 
 ```bash
-~/Downloads/repos/timeline/uninstall.sh
+/path/to/timeline/uninstall.sh
 ```
 
 ## Usage
