@@ -24,13 +24,22 @@ fi
 echo ""
 echo "Removing Claude Code integration..."
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TIMELINE_SCRIPT="$SCRIPT_DIR/timeline"
+# Check if Claude settings exist
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 
-if [ -f "$TIMELINE_SCRIPT" ]; then
-    "$TIMELINE_SCRIPT" uninstall
+if [ ! -f "$SETTINGS_FILE" ]; then
+    echo "ℹ️  Claude Code settings file not found at: $SETTINGS_FILE"
+    echo "   No hooks to remove."
 else
-    echo "⚠️  Could not remove Claude Code hooks (timeline script not found)"
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    TIMELINE_SCRIPT="$SCRIPT_DIR/timeline"
+    
+    if [ -f "$TIMELINE_SCRIPT" ]; then
+        "$TIMELINE_SCRIPT" uninstall
+    else
+        echo "⚠️  Could not remove Claude Code hooks (timeline script not found)"
+    fi
 fi
 
 echo ""

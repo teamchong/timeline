@@ -101,6 +101,18 @@ esac
 echo ""
 echo "Installing Claude Code hook for automatic snapshots..."
 
+# Check if Claude settings exist first
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+SETTINGS_FILE="$CLAUDE_DIR/settings.json"
+
+if [ ! -f "$SETTINGS_FILE" ]; then
+    echo "❌ Claude Code settings file not found at: $SETTINGS_FILE"
+    echo "Please make sure Claude Code is installed and configured."
+    echo ""
+    echo "Note: The timeline command has been installed and will work manually."
+    exit 1
+fi
+
 # Use timeline command to install hooks
 if [ "$INSTALL_METHOD" = "1" ] || [ "$INSTALL_METHOD" = "2" ]; then
     # Timeline should be in PATH now, use it directly
