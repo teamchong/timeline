@@ -274,6 +274,7 @@ if [ $# -gt 0 ]; then
             echo "Options:"
             echo "  a) Delete all timelines"
             echo "  0-$((TIMELINE_COUNT-1))) Delete specific timeline by number"
+            echo "  x-y) Delete range of timelines (e.g., 0-11)"
             echo ""
             
             while true; do
@@ -301,7 +302,37 @@ if [ $# -gt 0 ]; then
                         exit 0
                         ;;
                     *)
-                        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 0 ] && [ "$choice" -lt "$TIMELINE_COUNT" ]; then
+                        # Check for range (e.g., 0-11)
+                        if [[ "$choice" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+                            START="${BASH_REMATCH[1]}"
+                            END="${BASH_REMATCH[2]}"
+                            
+                            # Validate range
+                            if [ "$START" -ge 0 ] && [ "$END" -lt "$TIMELINE_COUNT" ] && [ "$START" -le "$END" ]; then
+                                RANGE_COUNT=$((END - START + 1))
+                                echo ""
+                                echo "⚠️  This will delete $RANGE_COUNT timelines (from #$START to #$END)"
+                                read -p "Are you sure? (y/N): " -n 1 -r
+                                echo
+                                if [[ $REPLY =~ ^[Yy]$ ]]; then
+                                    # Get all timeline branches in order
+                                    TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null | grep -v '/backup-'))
+                                    
+                                    # Delete the range
+                                    for i in $(seq $START $END); do
+                                        if [ $i -lt ${#TIMELINES[@]} ]; then
+                                            git branch -D "${TIMELINES[$i]}" >/dev/null 2>&1
+                                        fi
+                                    done
+                                    echo "✅ Deleted $RANGE_COUNT timelines (#$START to #$END)"
+                                else
+                                    echo "Cancelled."
+                                fi
+                                exit 0
+                            else
+                                echo "Invalid range. Please use format like 0-11 within 0-$((TIMELINE_COUNT-1))"
+                            fi
+                        elif [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 0 ] && [ "$choice" -lt "$TIMELINE_COUNT" ]; then
                             TIMELINE_BRANCH=$(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null | \
                                              sed -n "$((choice+1))p")
                             
@@ -317,7 +348,7 @@ if [ $# -gt 0 ]; then
                             fi
                             exit 0
                         else
-                            echo "Invalid selection. Please choose a, 0-$((TIMELINE_COUNT-1)), or press Enter to cancel."
+                            echo "Invalid selection. Please choose a, 0-$((TIMELINE_COUNT-1)), x-y range, or press Enter to cancel."
                         fi
                         ;;
                 esac
