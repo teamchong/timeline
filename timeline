@@ -896,11 +896,23 @@ if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null || 
     LAST_TIMELINE=$(git for-each-ref --sort=-committerdate --count=1 --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null)
     
     if [ -n "$LAST_TIMELINE" ]; then
-        # Compare current working tree with last timeline
-        # If no differences, skip creating a duplicate timeline
-        if git diff --quiet "$LAST_TIMELINE" 2>/dev/null && \
-           git diff --cached --quiet "$LAST_TIMELINE" 2>/dev/null && \
-           [ -z "$(git ls-files --others --exclude-standard 2>/dev/null)" ]; then
+        # Create a temporary index for the last timeline to compare untracked files
+        export GIT_INDEX_FILE=$(mktemp)
+        git read-tree "$LAST_TIMELINE" >/dev/null 2>&1
+        LAST_TREE=$(git write-tree 2>/dev/null)
+        rm -f $GIT_INDEX_FILE
+        unset GIT_INDEX_FILE
+        
+        # Create a temporary index for current state
+        export GIT_INDEX_FILE=$(mktemp)
+        git read-tree HEAD >/dev/null 2>&1
+        git add --all >/dev/null 2>&1
+        CURRENT_TREE=$(git write-tree 2>/dev/null)
+        rm -f $GIT_INDEX_FILE
+        unset GIT_INDEX_FILE
+        
+        # If the trees are identical, no changes since last timeline
+        if [ "$LAST_TREE" = "$CURRENT_TREE" ]; then
             # No changes since last timeline, exit silently
             exit 0
         fi
