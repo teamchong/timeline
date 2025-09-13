@@ -7,7 +7,7 @@ A lightweight, zero-impact Git utility designed for [Claude Code](https://claude
 ## Features
 
 - 🤖 **Claude Code Integration** - Automatic snapshots after each file edit in Claude Code
-- 🚀 **Zero-impact snapshots** - Uses Git's plumbing commands to create invisible branches
+- 🚀 **Zero-impact snapshots** - Creates lightweight branches without affecting your working tree
 - ⏱️ **Instant recovery** - Travel back to any point without affecting Git history
 - 🔍 **Powerful search** - Search across all timelines by content or filename
 - 📋 **Multiple view modes** - Browse changes, view diffs, or list files
