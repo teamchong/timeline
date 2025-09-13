@@ -72,7 +72,7 @@ display_timeline() {
             VISUAL=""
             if [ "$ADDS" -gt 0 ]; then
                 if [ "$ADDS" -lt 10 ]; then
-                    VISUAL="${VISUAL}$(printf '+%.0s' $(seq 1 $ADDS))"
+                    VISUAL="${VISUAL}$(printf -- '+%.0s' $(seq 1 $ADDS))"
                 elif [ "$ADDS" -lt 50 ]; then
                     VISUAL="${VISUAL}+++"
                 elif [ "$ADDS" -lt 100 ]; then
@@ -84,7 +84,7 @@ display_timeline() {
             
             if [ "$DELS" -gt 0 ]; then
                 if [ "$DELS" -lt 10 ]; then
-                    VISUAL="${VISUAL}$(printf '-%.0s' $(seq 1 $DELS))"
+                    VISUAL="${VISUAL}$(printf -- '-%.0s' $(seq 1 $DELS))"
                 elif [ "$DELS" -lt 50 ]; then
                     VISUAL="${VISUAL}---"
                 elif [ "$DELS" -lt 100 ]; then
