@@ -275,6 +275,7 @@ if [ $# -gt 0 ]; then
             echo "  a) Delete all timelines"
             echo "  0-$((TIMELINE_COUNT-1))) Delete specific timeline by number"
             echo "  x-y) Delete range of timelines (e.g., 0-11)"
+            echo "  Press Enter to cancel"
             echo ""
             
             while true; do
@@ -432,6 +433,7 @@ if [ $# -gt 0 ]; then
             if [ $TOTAL_GROUPS -gt 0 ]; then
                 echo "  1-$TOTAL_GROUPS) Remove specific branch group by number"
             fi
+            echo "  Press Enter to cancel"
             echo ""
             
             while true; do
