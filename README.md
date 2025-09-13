@@ -147,16 +147,29 @@ timeline uninstall  # Remove Claude Code hook
 
 ## Examples
 
-### Recover from accidental deletion
+### How Auto-Save Works
+```
+User: "Please refactor this function"
+Claude: [Edits src/utils.js via Edit tool]
+Timeline: ✅ Automatically creates snapshot after edit
+
+User: "Actually, that broke something"
+Claude: Let me check the timelines...
+> timeline travel
+# Selects previous snapshot
+# Working code restored!
+```
+
+### Recover from accidental changes
 ```bash
-# Oops, deleted important file
-rm important.js
+# After Claude Code makes multiple edits that break your code
+# (Timeline has been automatically saving snapshots)
 
 # View recent timelines
 timeline travel
 
-# Select timeline from before deletion
-# Files are restored!
+# Select timeline from before the breaking changes
+# Your working code is restored!
 ```
 
 ### Find when code was removed
