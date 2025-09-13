@@ -13,27 +13,39 @@ A lightweight, zero-impact Git utility that automatically captures code snapshot
 
 ## Installation
 
-### Quick Install (with Claude Code integration)
+### One-Line Install
 
 ```bash
-# Clone to your preferred location
-git clone https://github.com/yourusername/timeline.git ~/Downloads/repos/timeline
-
-# Install globally with Claude Code hook
-~/Downloads/repos/timeline/timeline install
+git clone https://github.com/yourusername/timeline.git ~/Downloads/repos/timeline && cd ~/Downloads/repos/timeline && ./install.sh
 ```
+
+This will:
+1. Clone the repository
+2. Create a symlink in `/usr/local/bin` (or let you choose another method)
+3. Set up Claude Code integration (optional)
+4. Verify the installation
 
 ### Manual Install
 
 ```bash
-# Make it executable
-chmod +x ~/Downloads/repos/timeline/timeline
+# Clone the repository
+git clone https://github.com/yourusername/timeline.git ~/Downloads/repos/timeline
 
-# Add to PATH (add to ~/.bashrc or ~/.zshrc)
-export PATH="$PATH:~/Downloads/repos/timeline"
+# Run the installer
+cd ~/Downloads/repos/timeline
+./install.sh
+```
 
-# Or create a symlink
-ln -s ~/Downloads/repos/timeline/timeline /usr/local/bin/timeline
+The installer offers multiple options:
+- **Symlink** (recommended) - Updates automatically when you pull changes
+- **Copy** - Standalone installation
+- **PATH setup** - Add the repo directory to PATH
+- **Claude Code only** - Just the hook, no global command
+
+### Uninstall
+
+```bash
+~/Downloads/repos/timeline/uninstall.sh
 ```
 
 ## Usage
