@@ -19,11 +19,11 @@ fi
 # Make timeline executable
 chmod +x "$TIMELINE_SCRIPT"
 
-echo "Choose installation method:"
-echo "  1) Symlink to /usr/local/bin (recommended)"
-echo "  2) Copy to /usr/local/bin"
+echo "Choose installation method for the 'timeline' command:"
+echo "  1) Symlink to /usr/local/bin (recommended - auto-updates)"
+echo "  2) Copy to /usr/local/bin (standalone)"
 echo "  3) Add directory to PATH (manual setup)"
-echo "  4) Claude Code integration only (no PATH setup)"
+echo "  4) Skip PATH setup (Claude Code auto-save will still work)"
 echo ""
 read -p "Select option (1-4, or press Enter for option 1): " INSTALL_METHOD
 
@@ -97,23 +97,20 @@ case "$INSTALL_METHOD" in
         ;;
 esac
 
-# Ask about Claude Code integration
+# Install Claude Code integration (main purpose of this tool)
 echo ""
-read -p "Install Claude Code integration? (Y/n): " -n 1 -r INSTALL_CLAUDE
-echo ""
+echo "Installing Claude Code hook for automatic snapshots..."
 
-if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-    echo "Installing Claude Code hook..."
-    
-    # Use the timeline script to install its own hook
-    if [ "$INSTALL_METHOD" = "4" ]; then
-        # If not in PATH, use the full path
-        "$TIMELINE_SCRIPT" install
-    else
-        # If in PATH, we can use the command directly
-        timeline install
-    fi
+# Use the timeline script to install its own hook
+if [ "$INSTALL_METHOD" = "4" ]; then
+    # If not in PATH, use the full path
+    "$TIMELINE_SCRIPT" install
+else
+    # If in PATH, we can use the command directly
+    timeline install || "$TIMELINE_SCRIPT" install
 fi
+
+echo "✅ Claude Code hook installed - snapshots will be created automatically after each file edit"
 
 # Test installation
 echo ""

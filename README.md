@@ -2,7 +2,7 @@
 
 A lightweight, zero-impact Git utility designed for [Claude Code](https://claude.ai/code) that automatically captures code snapshots as you work, allowing you to travel back to any point without affecting your Git history.
 
-> **Note**: While Timeline integrates seamlessly with Claude Code for automatic snapshots, it also works standalone as a general Git snapshot tool.
+> **Primary Purpose**: Timeline is built specifically for Claude Code users to automatically capture snapshots after every file edit. While the `timeline` command can be used standalone, the automatic snapshot feature (the main value) requires Claude Code.
 
 ## Features
 
@@ -24,8 +24,8 @@ git clone https://github.com/yourusername/timeline.git ~/Downloads/repos/timelin
 
 This will:
 1. Clone the repository
-2. Create a symlink in `/usr/local/bin` (recommended)
-3. **Install Claude Code hook for automatic snapshots after each file edit**
+2. Create a symlink in `/usr/local/bin` for the `timeline` command
+3. **Install Claude Code hook for automatic snapshots** (the main feature!)
 4. Verify the installation
 
 After installation, Timeline will automatically save snapshots whenever you edit files in Claude Code - no manual saving needed!
@@ -41,11 +41,15 @@ cd ~/Downloads/repos/timeline
 ./install.sh
 ```
 
-The installer offers multiple options:
+The installer will:
+1. Set up the `timeline` command (with options for symlink/copy/PATH)
+2. **Always install the Claude Code hook** for automatic snapshots
+
+Installation options for the command:
 - **Symlink** (recommended) - Updates automatically when you pull changes
 - **Copy** - Standalone installation
 - **PATH setup** - Add the repo directory to PATH
-- **Claude Code only** - Just the hook, no global command
+- **Skip PATH** - Claude Code auto-save will still work without global command
 
 ### Uninstall
 
