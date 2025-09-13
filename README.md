@@ -12,7 +12,7 @@ A lightweight, zero-impact Git utility designed for [Claude Code](https://claude
 - 🔍 **Powerful search** - Search across all timelines by content or filename  
 - 📋 **Smart filtering** - Only shows timelines and files with actual differences
 - 🗂️ **Interactive browsing** - Browse individual files with full diff highlighting
-- 🧹 **Smart cleanup** - Automatically removes old timelines (keeps last 20)
+- 🧹 **Manual cleanup** - Remove orphaned timelines when branches are deleted
 - 🎯 **Branch-aware** - Separate timelines for each Git branch
 
 ## Installation
@@ -119,7 +119,7 @@ Timeline uses Git's plumbing commands to create lightweight branches in `refs/he
 - Are organized under `timelines/` prefix to keep them separate
 - Don't affect your working directory or HEAD
 - Don't interfere with normal Git operations
-- Are automatically cleaned up (keeps last 20)
+- Can be manually cleaned up when branches are deleted
 
 Each timeline captures:
 - All staged changes
