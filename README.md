@@ -9,8 +9,9 @@ A lightweight, zero-impact Git utility designed for [Claude Code](https://claude
 - 🤖 **Claude Code Integration** - Automatic snapshots after each file edit in Claude Code
 - 🚀 **Zero-impact snapshots** - Creates lightweight branches without affecting your working tree
 - ⏱️ **Instant recovery** - Travel back to any point without affecting Git history
-- 🔍 **Powerful search** - Search across all timelines by content or filename
-- 📋 **Multiple view modes** - Browse changes, view diffs, or list files
+- 🔍 **Powerful search** - Search across all timelines by content or filename  
+- 📋 **Smart filtering** - Only shows timelines and files with actual differences
+- 🗂️ **Interactive browsing** - Browse individual files with full diff highlighting
 - 🧹 **Smart cleanup** - Automatically removes old timelines (keeps last 20)
 - 🎯 **Branch-aware** - Separate timelines for each Git branch
 
@@ -65,43 +66,40 @@ Installation options for the command:
 timeline              # Show help
 timeline save         # Create a timeline manually
 timeline travel       # Browse and restore timelines
-timeline view         # View timeline contents
-timeline search text  # Search for text in timelines
+timeline view         # Quick view all timelines with changes
+timeline browse       # Browse files in a specific timeline
+timeline search       # Search for text across timelines
 timeline delete       # Delete timelines interactively
 timeline cleanup      # Remove orphaned timelines
 ```
 
-### View Modes
+### Command Details
 
-The `timeline view` command offers four modes:
+#### `timeline view`
+Shows all timelines with a preview of changed files. Each timeline displays:
+- Timeline description and commit reference
+- Files that changed compared to current workspace
+- First 3 lines of changes for each file
+- **Smart filtering**: Only shows timelines with actual differences from current workspace
 
-1. **File browser** - See which files changed with preview
-   - Use when: You want to browse what files were modified
-   - Shows: File names + first 3 lines of changes
+#### `timeline browse`
+Interactive file browser for a specific timeline:
+1. Select a timeline to browse (only shows timelines with differences)
+2. See list of files different from current workspace (only files with actual changes)
+3. Select a file to view its full diff with color highlighting
+4. **No false positives**: Every listed file is guaranteed to have viewable differences
 
-2. **Quick diff** - See what was added/removed (no filenames)
-   - Use when: You want to quickly see code changes
-   - Shows: All + and - lines without file context
-
-3. **File list** - Just list all files in timeline
-   - Use when: You want to see complete file structure
-   - Shows: All files that exist in the timeline
-
-4. **Search** - Find text in timelines
-   - Use when: Looking for specific code
-   - Options: Search in all content, changed lines only, or filenames
-
-### Search Options
-
+#### `timeline search [pattern]`
+Search across all timelines. Can be used two ways:
 ```bash
-timeline search "function"  # Search for 'function' in all timelines
+timeline search "function"  # Direct search for 'function'
+timeline search            # Interactive prompt for search query
 ```
 
-Search modes:
-- **Both content and filenames** - Search everywhere
-- **Content only (all lines)** - Search in all file contents
-- **Changed lines only** - Search only in additions/deletions
-- **Filenames only** - Search in file paths
+Features:
+- **Searches both content and filenames** by default
+- **Smart filtering**: Only searches in timelines and files that differ from current workspace
+- **Regex support**: Use patterns like `"function.*test"`
 
 ### Timeline Display
 
@@ -128,6 +126,13 @@ Each timeline captures:
 - All unstaged changes
 - All untracked files
 - Current HEAD reference
+
+### Smart Filtering
+Timeline intelligently filters what you see:
+- **Timeline level**: Only shows timelines that differ from your current workspace
+- **File level**: Only shows files that have actual changes when browsing
+- **Search level**: Only searches in content that differs from current state
+- **No duplicates**: Never shows the same state twice (skips timelines identical to HEAD)
 
 ## Claude Code Integration
 
@@ -168,6 +173,7 @@ Claude: Let me check the timelines...
 # View recent timelines
 timeline travel
 
+# Preview shows what will change before confirming
 # Select timeline from before the breaking changes
 # Your working code is restored!
 ```
@@ -177,17 +183,57 @@ timeline travel
 # Search for removed function
 timeline search "oldFunction"
 
-# Shows which timeline contains it
-# Travel back to recover the code
+# Shows which timeline contains it with context
+# Use timeline travel to recover the code
 ```
 
-### Preview changes before restoring
+### Recover from destructive git operations
 ```bash
-# View what changed in timelines
+# Working on ImportantChange.ts in Claude Code
+# Timeline automatically saves snapshots after each edit
+
+# Accidentally run destructive git command
+git checkout HEAD ImportantChange.ts  # ❌ Destroys your work!
+
+# But Timeline has your back! 🎉
+timeline travel
+
+# Timeline shows:
+#   0: +15 Add user authentication logic @abc123
+#      +++++-----  1 files, +45 lines, -12 lines  
+#   1: +16 Fix validation edge cases @abc123  
+#      +++  1 files, +8 lines, -0 lines
+#   2: +17 Add comprehensive error handling @abc123
+#      ++++--  1 files, +23 lines, -5 lines
+
+# Select timeline 2 (your latest work)
+# Preview shows exactly what you'll recover
+# Confirm and your destroyed work is restored!
+```
+
+### Browse specific timeline contents
+```bash
+# Quick overview of all changes
 timeline view
 
-# Choose "File browser" to see which files changed
-# Choose "Quick diff" to see actual code changes
+# Deep dive into a specific timeline
+timeline browse
+# Select timeline number
+# Browse individual files and see full diffs
+```
+
+### Search examples
+```bash
+# Direct search
+timeline search "TODO"           # Find all TODOs
+timeline search "function.*test" # Regex patterns work
+timeline search "auth"           # Find authentication code
+
+# Interactive search
+timeline search
+# 🔍 Enter search query: [you type your pattern]
+# Automatically searches both content and filenames
+# Shows results with file context and line numbers
 ```
 
 ## Requirements

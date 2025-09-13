@@ -14,6 +14,30 @@ set -e
 # Auto-detect script location
 SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
+# Shared function to display file changes for a timeline
+display_timeline_changes() {
+    local BRANCH="$1"
+    local COMPARE_REF="${2:-HEAD}"  # Default to HEAD if not specified
+    
+    # Show files that changed with preview
+    echo "   Files that changed (with preview):"
+    CHANGED_FILES=$(git diff --name-only "$COMPARE_REF" "$BRANCH" 2>/dev/null | head -10)
+    if [ -n "$CHANGED_FILES" ]; then
+        while IFS= read -r file; do
+            if [ -n "$file" ]; then
+                echo "      📄 $file"
+                # Show first 3 lines of changes
+                DIFF=$(git diff "$COMPARE_REF" "$BRANCH" -- "$file" 2>/dev/null | grep '^[+-]' | grep -v '^+++\|^---' | head -3)
+                if [ -n "$DIFF" ]; then
+                    echo "$DIFF" | while IFS= read -r line; do
+                        echo "         $line"
+                    done
+                fi
+            fi
+        done <<< "$CHANGED_FILES"
+    fi
+}
+
 # Shared function to display timeline entries
 display_timeline() {
     local CURRENT_BRANCH="$1"
@@ -23,38 +47,37 @@ display_timeline() {
     echo ""
     
     # Get all timeline entries sorted by date (newest first), excluding backups
-    TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null | grep -v '/backup-' | head -20))
+    ALL_TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null | grep -v '/backup-' | head -20))
+    TIMELINES=()
+    
+    # Filter out timelines that are identical to HEAD
+    for timeline in "${ALL_TIMELINES[@]}"; do
+        if [ -n "$(git diff --name-only HEAD "$timeline" 2>/dev/null)" ]; then
+            TIMELINES+=("$timeline")
+        fi
+    done
     
     if [ ${#TIMELINES[@]} -eq 0 ]; then
         echo "No timeline entries found for branch '$CURRENT_BRANCH'"
         return 1
     fi
     
-    # Process each timeline
-    for i in "${!TIMELINES[@]}"; do
+    # Process each timeline (oldest first, newest last)
+    # Note: TIMELINES array is sorted newest first, so we need to iterate in reverse
+    for ((i=${#TIMELINES[@]}-1; i>=0; i--)); do
+        # Calculate display index (0 = oldest, higher = newer)
+        DISPLAY_INDEX=$((${#TIMELINES[@]} - 1 - i))
         BRANCH="${TIMELINES[$i]}"
         
         # Get timeline commit message
         SUBJECT=$(git log -1 --pretty=format:"%s" "$BRANCH" 2>/dev/null)
         timeline_info=$(echo "$SUBJECT" | sed 's/ - [0-9]* files$//')
         
-        # Calculate what to diff against
-        if [ $i -eq 0 ]; then
-            # First timeline (newest): diff against current working directory
-            # This shows what would change if you travel to this timeline
-            STATS=$(git diff --shortstat "$BRANCH" 2>/dev/null | sed 's/files\? changed/files/' || echo "")
-        elif [ $i -lt $((${#TIMELINES[@]} - 1)) ]; then
-            # Middle timeline entries: diff against the previous (newer) timeline
-            PREV_TIMELINE="${TIMELINES[$((i - 1))]}"
-            STATS=$(git diff --shortstat "$PREV_TIMELINE" "$BRANCH" 2>/dev/null | sed 's/files\? changed/files/' || echo "")
-        else
-            # Last timeline (oldest): diff against previous timeline
-            PREV_TIMELINE="${TIMELINES[$((i - 1))]}"
-            STATS=$(git diff --shortstat "$PREV_TIMELINE" "$BRANCH" 2>/dev/null | sed 's/files\? changed/files/' || echo "")
-        fi
+        # Always compare against current HEAD to show what would change if you travel to this timeline
+        STATS=$(git diff --shortstat HEAD "$BRANCH" 2>/dev/null | sed 's/files\? changed/files/' || echo "")
         
         # Format line
-        printf "  %2d: %s\n" "$i" "$timeline_info"
+        printf "  %2d: %s\n" "$DISPLAY_INDEX" "$timeline_info"
         
         # Show visual diff on next line if there are changes
         if [ -n "$STATS" ]; then
@@ -318,10 +341,11 @@ if [ $# -gt 0 ]; then
                                     # Get all timeline branches in order
                                     TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null | grep -v '/backup-'))
                                     
-                                    # Delete the range
+                                    # Delete the range (convert display indices to array indices)
                                     for i in $(seq $START $END); do
-                                        if [ $i -lt ${#TIMELINES[@]} ]; then
-                                            git branch -D "${TIMELINES[$i]}" >/dev/null 2>&1
+                                        ARRAY_INDEX=$((${#TIMELINES[@]} - 1 - i))
+                                        if [ $ARRAY_INDEX -ge 0 ] && [ $ARRAY_INDEX -lt ${#TIMELINES[@]} ]; then
+                                            git branch -D "${TIMELINES[$ARRAY_INDEX]}" >/dev/null 2>&1
                                         fi
                                     done
                                     echo "✅ Deleted $RANGE_COUNT timelines (#$START to #$END)"
@@ -333,8 +357,10 @@ if [ $# -gt 0 ]; then
                                 echo "Invalid range. Please use format like 0-11 within 0-$((TIMELINE_COUNT-1))"
                             fi
                         elif [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 0 ] && [ "$choice" -lt "$TIMELINE_COUNT" ]; then
-                            TIMELINE_BRANCH=$(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null | \
-                                             sed -n "$((choice+1))p")
+                            # Get all timeline branches and convert display index to array index
+                            TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null | grep -v '/backup-'))
+                            ARRAY_INDEX=$((${#TIMELINES[@]} - 1 - choice))
+                            TIMELINE_BRANCH="${TIMELINES[$ARRAY_INDEX]}"
                             
                             echo ""
                             echo "⚠️  Delete timeline: $TIMELINE_BRANCH?"
@@ -359,8 +385,8 @@ if [ $# -gt 0 ]; then
             echo "======================================"
             echo ""
             
-            # Get all existing branches (local and remote)
-            EXISTING_BRANCHES=$(git branch -a | sed 's/^\*\?\s*//' | sed 's/^remotes\///' | sort -u)
+            # Get all existing branches (local and remote), excluding timeline branches  
+            EXISTING_BRANCHES=$(git branch -a | sed 's/^[* ]*//' | grep -v 'timelines/' | sed 's/^remotes\///' | sort -u)
             
             # Find orphaned timeline branches
             ORPHANED_BRANCHES=()
@@ -391,46 +417,18 @@ if [ $# -gt 0 ]; then
             echo "Found ${#ORPHANED_BRANCHES[@]} orphaned timeline branches:"
             echo ""
             
-            # Group and display by base branch (without associative arrays)
-            UNIQUE_BASES=""
-            group_num=1
-            
-            # Get unique base branches
-            for orphaned in "${ORPHANED_BRANCHES[@]}"; do
-                IFS=':' read -r full_branch base_branch commit_msg <<< "$orphaned"
-                if ! echo "$UNIQUE_BASES" | grep -q "^$base_branch$"; then
-                    UNIQUE_BASES="$UNIQUE_BASES$base_branch"$'\n'
-                    
-                    # Count timelines for this base branch
-                    count=0
-                    for o in "${ORPHANED_BRANCHES[@]}"; do
-                        IFS=':' read -r fb bb cm <<< "$o"
-                        if [ "$bb" = "$base_branch" ]; then
-                            count=$((count+1))
-                        fi
-                    done
-                    
-                    echo "  $group_num: $base_branch ($count timelines)"
-                    
-                    # List timelines for this base branch
-                    for o in "${ORPHANED_BRANCHES[@]}"; do
-                        IFS=':' read -r fb bb cm <<< "$o"
-                        if [ "$bb" = "$base_branch" ]; then
-                            timestamp=$(echo "$fb" | sed "s|timelines/${bb}/||")
-                            echo "      $timestamp - $cm"
-                        fi
-                    done
-                    echo ""
-                    group_num=$((group_num+1))
-                fi
+            # Display individual timeline branches with numbers
+            for i in "${!ORPHANED_BRANCHES[@]}"; do
+                IFS=':' read -r full_branch base_branch commit_msg <<< "${ORPHANED_BRANCHES[$i]}"
+                printf "  %2d: %s\n" "$i" "$full_branch"
+                printf "      %s\n" "$commit_msg"
             done
             
-            TOTAL_GROUPS=$((group_num-1))
-            
+            echo ""
             echo "Options:"
             echo "  a) Remove all orphaned timeline branches"
-            if [ $TOTAL_GROUPS -gt 0 ]; then
-                echo "  1-$TOTAL_GROUPS) Remove specific branch group by number"
+            if [ ${#ORPHANED_BRANCHES[@]} -gt 0 ]; then
+                echo "  0-$((${#ORPHANED_BRANCHES[@]} - 1))) Remove specific timeline by number"
             fi
             echo ""
             
@@ -462,218 +460,242 @@ if [ $# -gt 0 ]; then
                         exit 0
                         ;;
                     *)
-                        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le $TOTAL_GROUPS ]; then
-                            # Get the base branch name for this choice
-                            selected_base=$(echo "$UNIQUE_BASES" | sed -n "${choice}p")
-                            
-                            # Count how many branches will be deleted
-                            delete_count=0
-                            for orphaned in "${ORPHANED_BRANCHES[@]}"; do
-                                IFS=':' read -r full_branch base_branch _ <<< "$orphaned"
-                                if [ "$base_branch" = "$selected_base" ]; then
-                                    delete_count=$((delete_count+1))
-                                fi
-                            done
+                        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 0 ] && [ "$choice" -lt ${#ORPHANED_BRANCHES[@]} ]; then
+                            # Get the selected timeline branch
+                            IFS=':' read -r selected_branch _ _ <<< "${ORPHANED_BRANCHES[$choice]}"
                             
                             echo ""
-                            echo "⚠️  This will permanently delete all $delete_count timeline branches for '$selected_base'"
+                            echo "⚠️  This will permanently delete timeline: $selected_branch"
                             read -p "Are you sure? (y/N): " -n 1 -r
                             echo ""
                             if [[ $REPLY =~ ^[Yy]$ ]]; then
-                                for orphaned in "${ORPHANED_BRANCHES[@]}"; do
-                                    IFS=':' read -r full_branch base_branch _ <<< "$orphaned"
-                                    if [ "$base_branch" = "$selected_base" ]; then
-                                        echo "🗑️  Removing branch: $full_branch"
-                                        git branch -D "$full_branch" 2>/dev/null || true
-                                    fi
-                                done
-                                echo "✅ Removed $delete_count timeline branches for '$selected_base'"
+                                echo "🗑️  Removing branch: $selected_branch"
+                                git branch -D "$selected_branch" 2>/dev/null || true
+                                echo "✅ Removed timeline branch: $selected_branch"
                             else
                                 echo "Cancelled."
                             fi
                             exit 0
                         else
-                            echo "Invalid selection. Please choose a, 1-$TOTAL_GROUPS, or press Enter to cancel."
+                            echo "Invalid selection. Please choose a, 0-$((${#ORPHANED_BRANCHES[@]} - 1)), or press Enter to cancel."
                         fi
                         ;;
                 esac
             done
             ;;
-        "view"|"search")
-            # View or search timeline content
+        "view")
+            # Quick view - show all timelines with file changes
             CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
+            CURRENT_HEAD=$(git rev-parse HEAD 2>/dev/null)
             
-            # If no pattern provided, show preview mode
-            if [ -z "$2" ] || [ "$1" = "view" ]; then
-                if [ "$1" = "search" ] && [ -z "$2" ]; then
-                    echo "Usage: timeline search <pattern>"
-                    echo "       timeline view [timeline-number]"
-                    echo "Search for pattern or view timeline contents"
-                    exit 1
+            # Get all timeline branches and filter out those identical to HEAD
+            ALL_TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/*" 2>/dev/null))
+            TIMELINES=()
+            
+            # Filter out timelines that are identical to HEAD
+            for timeline in "${ALL_TIMELINES[@]}"; do
+                if [ -n "$(git diff --name-only HEAD "$timeline" 2>/dev/null)" ]; then
+                    TIMELINES+=("$timeline")
                 fi
+            done
+            
+            if [ ${#TIMELINES[@]} -eq 0 ]; then
+                echo "No timelines with changes found for branch '$CURRENT_BRANCH'"
+                exit 0
+            fi
+            
+            echo "Found ${#TIMELINES[@]} timelines for branch '$CURRENT_BRANCH'"
+            echo ""
+            
+            # Display each timeline with changes
+            for ((i=${#TIMELINES[@]}-1; i>=0; i--)); do
+                # Calculate display index (0 = oldest, higher = newer)
+                DISPLAY_INDEX=$((${#TIMELINES[@]} - 1 - i))
+                BRANCH="${TIMELINES[$i]}"
                 
-                # Preview mode - show changes in timelines
-                echo "📋 View timeline contents:"
-                echo "  1) File browser - See which files changed with preview"
-                echo "  2) Quick diff - See what was added/removed (no filenames)"
-                echo "  3) File list - Just list all files in timeline"
-                echo "  4) Search - Find text in timelines"
+                # Get timeline info
+                SUBJECT=$(git log -1 --pretty=format:"%s" "$BRANCH" 2>/dev/null)
+                timeline_info=$(echo "$SUBJECT" | sed 's/ - [0-9]* files$//')
+                
+                echo "📍 $timeline_info"
+                
+                # Use shared function to display changes
+                display_timeline_changes "$BRANCH" "HEAD"
                 echo ""
-                read -p "Select view mode (1-4, or press Enter to cancel): " VIEW_MODE
+            done
+            ;;
+        "browse")
+            # Browse files in a specific timeline
+            CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
+            CURRENT_HEAD=$(git rev-parse HEAD 2>/dev/null)
+            
+            # Get all timeline branches and filter out those identical to HEAD
+            ALL_TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/*" 2>/dev/null))
+            TIMELINES=()
+            
+            # Filter out timelines that are identical to HEAD
+            for timeline in "${ALL_TIMELINES[@]}"; do
+                if [ -n "$(git diff --name-only HEAD "$timeline" 2>/dev/null)" ]; then
+                    TIMELINES+=("$timeline")
+                fi
+            done
+            
+            # Outer loop for timeline selection
+            while true; do
+                # Use the same display function as travel
+                display_timeline "$CURRENT_BRANCH" "$CURRENT_HEAD"
+                echo ""
+                read -p "Select timeline number to browse (or press Enter to exit): " TIMELINE_NUM
                 
-                if [ -z "$VIEW_MODE" ]; then
-                    echo "Cancelled."
+                if [ -z "$TIMELINE_NUM" ]; then
+                    echo "Exiting browse mode."
                     exit 0
                 fi
                 
-                if [ "$VIEW_MODE" = "4" ]; then
-                    # Switch to search mode
-                    read -p "Enter search pattern: " PATTERN
-                    if [ -z "$PATTERN" ]; then
-                        echo "No pattern provided."
-                        exit 1
+                if [ "$TIMELINE_NUM" -lt 0 ] || [ "$TIMELINE_NUM" -ge "${#TIMELINES[@]}" ] 2>/dev/null; then
+                    echo "Invalid selection. Please choose 0-$((${#TIMELINES[@]} - 1))"
+                    echo ""
+                    continue
+                fi
+                
+                # Convert display index to array index
+                # Display: 0=oldest, highest=newest
+                # Array: 0=newest, highest=oldest
+                ARRAY_INDEX=$((${#TIMELINES[@]} - 1 - TIMELINE_NUM))
+                
+                # Show files in selected timeline
+                BRANCH="${TIMELINES[$ARRAY_INDEX]}"
+                
+                # Inner loop to allow viewing multiple files
+                while true; do
+                echo ""
+                echo "Files different from current workspace in timeline $TIMELINE_NUM:"
+                # Only show files that are different from HEAD and have actual diff content
+                POTENTIAL_FILES=$(git diff --name-only HEAD "$BRANCH" 2>/dev/null)
+                FILE_ARRAY=()
+                
+                if [ -n "$POTENTIAL_FILES" ]; then
+                    # Double-check each file has actual diff content
+                    while IFS= read -r file; do
+                        if [ -n "$(git diff HEAD "$BRANCH" -- "$file" 2>/dev/null)" ]; then
+                            FILE_ARRAY+=("$file")
+                        fi
+                    done <<< "$POTENTIAL_FILES"
+                fi
+                
+                if [ ${#FILE_ARRAY[@]} -gt 0 ]; then
+                    
+                    # Display files with numbers
+                    for idx in "${!FILE_ARRAY[@]}"; do
+                        printf "  %2d) %s\n" "$((idx + 1))" "${FILE_ARRAY[$idx]}"
+                    done
+                    
+                    echo ""
+                    read -p "Select file number to view diff (or press Enter to go back): " FILE_NUM
+                    
+                    if [ -z "$FILE_NUM" ]; then
+                        # Enter pressed - go back to timeline selection
+                        break
+                    elif [ "$FILE_NUM" -ge 1 ] && [ "$FILE_NUM" -le "${#FILE_ARRAY[@]}" ] 2>/dev/null; then
+                        SELECTED_FILE="${FILE_ARRAY[$((FILE_NUM - 1))]}"
+                        echo ""
+                        echo "Diff for $SELECTED_FILE (compared to current workspace):"
+                        echo "───────────────────────────────────────────────────────"
+                        # Always compare against current HEAD to show what would change
+                        # Use --color=always to force colors even in pipes
+                        DIFF_OUTPUT=$(git diff --color=always HEAD "$BRANCH" -- "$SELECTED_FILE" 2>/dev/null)
+                        
+                        if [ -n "$DIFF_OUTPUT" ]; then
+                            # Show the diff with colors and context
+                            echo "$DIFF_OUTPUT"
+                            echo "───────────────────────────────────────────────────────"
+                            echo "Legend: $(tput setaf 1)- removed from current$(tput sgr0) | $(tput setaf 2)+ added in timeline$(tput sgr0)"
+                        else
+                            echo "  (no changes - file is identical to current workspace)"
+                        fi
+                        
+                        # Wait for user to press Enter before showing file list again
+                        echo ""
+                        read -p "Press Enter to continue..."
+                    else
+                        echo "Invalid selection. Please choose 1-${#FILE_ARRAY[@]} or press Enter to go back."
                     fi
                 else
-                    # Handle view modes
-                    PATTERN=""  # No pattern for view mode
+                    echo "  (no files with differences)"
+                    break
                 fi
-            else
-                # Search mode with pattern
+            done  # End inner loop (file selection)
+            done  # End outer loop (timeline selection)
+            ;;
+        "search")
+            # Search functionality
+            CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
+            CURRENT_HEAD=$(git rev-parse HEAD 2>/dev/null)
+            
+            # Check for pattern argument
+            if [ -n "$2" ]; then
+                # Pattern provided as argument
                 PATTERN="$2"
-                VIEW_MODE="4"  # Force search mode
-            fi
-            
-            # For search mode, ask what to search
-            if [ "$VIEW_MODE" = "4" ]; then
-                echo ""
-                echo "🔍 Search for '$PATTERN' in:"
-                echo "  1) Both content and filenames"
-                echo "  2) Content only (all lines)"
-                echo "  3) Changed lines only (additions/deletions)"
-                echo "  4) Filenames only"
-                echo ""
-                read -p "Select search type (1-4, or press Enter for both): " SEARCH_TYPE
-                
-                # Default to both if no selection or invalid
-                if [ -z "$SEARCH_TYPE" ]; then
-                    SEARCH_TYPE="1"
+            else
+                # Direct search prompt
+                read -p "🔍 Enter search query: " PATTERN
+                if [ -z "$PATTERN" ]; then
+                    echo "No search query provided."
+                    exit 1
                 fi
-                
-                # Set search flags based on selection
-                SEARCH_CONTENT=false
-                SEARCH_FILES=false
-                SEARCH_CHANGED_ONLY=false
-                case "$SEARCH_TYPE" in
-                    "2")
-                        SEARCH_CONTENT=true
-                        echo "Searching in content only (all lines)..."
-                        ;;
-                    "3")
-                        SEARCH_CHANGED_ONLY=true
-                        echo "Searching in changed lines only..."
-                        ;;
-                    "4")
-                        SEARCH_FILES=true
-                        echo "Searching in filenames only..."
-                        ;;
-                    *)
-                        SEARCH_CONTENT=true
-                        SEARCH_FILES=true
-                        echo "Searching in both content and filenames..."
-                        ;;
-                esac
-                echo ""
             fi
             
-            # Get all timeline branches sorted by date (newest first)
-            # Use pattern to match branches starting with timelines/CURRENT_BRANCH/
-            TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/*" 2>/dev/null))
+            # Default to searching both content and filenames
+            SEARCH_CONTENT=true
+            SEARCH_FILENAMES=true
+            
+            
+            # Get all timeline branches sorted by date (newest first) and filter out those identical to HEAD
+            ALL_TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/*" 2>/dev/null))
+            TIMELINES=()
+            
+            # Filter out timelines that are identical to HEAD
+            for timeline in "${ALL_TIMELINES[@]}"; do
+                if [ -n "$(git diff --name-only HEAD "$timeline" 2>/dev/null)" ]; then
+                    TIMELINES+=("$timeline")
+                fi
+            done
             
             # If still no timelines found, try a different approach
-            if [ ${#TIMELINES[@]} -eq 0 ]; then
-                TIMELINES=($(git branch --list "timelines/$CURRENT_BRANCH/*" 2>/dev/null | sed 's/^[* ]*//' | sort -r))
+            if [ ${#TIMELINES[@]} -eq 0 ] && [ ${#ALL_TIMELINES[@]} -eq 0 ]; then
+                ALL_TIMELINES=($(git branch --list "timelines/$CURRENT_BRANCH/*" 2>/dev/null | sed 's/^[* ]*//' | sort -r))
+                for timeline in "${ALL_TIMELINES[@]}"; do
+                    if [ -n "$(git diff --name-only HEAD "$timeline" 2>/dev/null)" ]; then
+                        TIMELINES+=("$timeline")
+                    fi
+                done
             fi
             
             if [ ${#TIMELINES[@]} -eq 0 ]; then
-                echo "No timeline timelines found for branch '$CURRENT_BRANCH'"
+                echo "No timeline timelines with changes found for branch '$CURRENT_BRANCH'"
                 echo "Debug: Looking for timelines/$CURRENT_BRANCH/*"
                 echo "Available timelines:"
                 git branch --list "timelines/*" | head -5
                 exit 0
             fi
             
+            # Perform search
+            echo "Searching for '$PATTERN' in ${#TIMELINES[@]} timelines..."
+            echo ""
+            
             FOUND_ANY=false
-            
-            # Handle different view modes
-            if [ "$VIEW_MODE" != "4" ]; then
-                # View modes (not search)
-                echo "Found ${#TIMELINES[@]} timelines for branch '$CURRENT_BRANCH'"
-                echo ""
+            SEARCH_TIMELINES=("${TIMELINES[@]}")
                 
-                for i in "${!TIMELINES[@]}"; do
-                    BRANCH="${TIMELINES[$i]}"
-                    
-                    # Get timeline info
-                    SUBJECT=$(git log -1 --pretty=format:"%s" "$BRANCH" 2>/dev/null)
-                    timeline_info=$(echo "$SUBJECT" | sed 's/ - [0-9]* files$//')
-                    
-                    echo "📍 Timeline $i: $timeline_info"
-                    
-                    case "$VIEW_MODE" in
-                        "1")
-                            # File browser mode - shows which files changed with preview
-                            echo "   Changed files:"
-                            CHANGED_FILES=$(git diff --name-only HEAD "$BRANCH" 2>/dev/null | head -10)
-                            if [ -n "$CHANGED_FILES" ]; then
-                                while IFS= read -r file; do
-                                    if [ -n "$file" ]; then
-                                        echo "      📄 $file"
-                                        # Show first 3 lines of changes
-                                        DIFF=$(git diff HEAD "$BRANCH" -- "$file" 2>/dev/null | grep '^[+-]' | grep -v '^+++\|^---' | head -3)
-                                        if [ -n "$DIFF" ]; then
-                                            echo "$DIFF" | while IFS= read -r line; do
-                                                echo "         $line"
-                                            done
-                                        fi
-                                    fi
-                                done <<< "$CHANGED_FILES"
-                            fi
-                            ;;
-                        "2")
-                            # Quick diff mode - shows what changed without file context
-                            echo "   Changes (additions and deletions):"
-                            DIFF=$(git diff HEAD "$BRANCH" 2>/dev/null | grep '^[+-]' | grep -v '^+++\|^---' | head -20)
-                            if [ -n "$DIFF" ]; then
-                                echo "$DIFF" | while IFS= read -r line; do
-                                    echo "      $line"
-                                done
-                            else
-                                echo "      (no changes)"
-                            fi
-                            ;;
-                        "3")
-                            # File list mode - just list all files in the timeline
-                            echo "   All files in timeline:"
-                            FILES=$(git ls-tree -r --name-only "$BRANCH" 2>/dev/null | head -20)
-                            if [ -n "$FILES" ]; then
-                                echo "$FILES" | while IFS= read -r file; do
-                                    echo "      $file"
-                                done
-                            fi
-                            ;;
-                    esac
-                    echo ""
+                # Search in selected timeline(s)
+                for BRANCH in "${SEARCH_TIMELINES[@]}"; do
+                # Get timeline index for display
+                for idx in "${!TIMELINES[@]}"; do
+                    if [ "${TIMELINES[$idx]}" = "$BRANCH" ]; then
+                        # Display index is same as array index (0 = oldest)
+                        TIMELINE_INDEX=$idx
+                        break
+                    fi
                 done
-                
-                exit 0
-            fi
-            
-            # Search mode
-            echo "Searching in ${#TIMELINES[@]} timelines..."
-            
-            # Search in each timeline
-            for i in "${!TIMELINES[@]}"; do
-                BRANCH="${TIMELINES[$i]}"
                 
                 # Get timeline info
                 SUBJECT=$(git log -1 --pretty=format:"%s" "$BRANCH" 2>/dev/null)
@@ -685,12 +707,22 @@ if [ $# -gt 0 ]; then
                 CHANGED_MATCHES=""
                 
                 if [ "$SEARCH_CONTENT" = true ]; then
-                    # git grep -l includes branch name in output, so we need to strip it
-                    CONTENT_MATCHES=$(git grep -l "$PATTERN" "$BRANCH" 2>/dev/null | sed "s|^$BRANCH:||" || true)
+                    # Only search in files that are different from HEAD
+                    CHANGED_FILES=$(git diff --name-only HEAD "$BRANCH" 2>/dev/null)
+                    if [ -n "$CHANGED_FILES" ]; then
+                        CONTENT_MATCHES=""
+                        while IFS= read -r file; do
+                            # Check if this file contains the pattern
+                            if git grep -q "$PATTERN" "$BRANCH" -- "$file" 2>/dev/null; then
+                                CONTENT_MATCHES="${CONTENT_MATCHES}${file}"$'\n'
+                            fi
+                        done <<< "$CHANGED_FILES"
+                    fi
                 fi
                 
-                if [ "$SEARCH_FILES" = true ]; then
-                    FILENAME_MATCHES=$(git ls-tree -r --name-only "$BRANCH" 2>/dev/null | grep "$PATTERN" 2>/dev/null || true)
+                if [ "$SEARCH_FILENAMES" = true ]; then
+                    # Only search in files that are different from HEAD
+                    FILENAME_MATCHES=$(git diff --name-only HEAD "$BRANCH" 2>/dev/null | grep -i "$PATTERN" 2>/dev/null || echo "")
                 fi
                 
                 if [ "$SEARCH_CHANGED_ONLY" = true ]; then
@@ -707,7 +739,7 @@ if [ $# -gt 0 ]; then
                         FOUND_ANY=true
                     fi
                     
-                    echo "📍 Timeline $i: $timeline_info"
+                    echo "📍 $timeline_info"
                     
                     if [ -n "$CHANGED_MATCHES" ]; then
                         echo "   Changed lines matching '$PATTERN':"
@@ -720,13 +752,16 @@ if [ $# -gt 0 ]; then
                         echo "   Content matches:"
                         while IFS= read -r file; do
                             if [ -n "$file" ]; then
-                                # Show the matching line with context
-                                MATCH_LINE=$(git grep -n "$PATTERN" "$BRANCH" -- "$file" 2>/dev/null | head -1)
-                                if [ -n "$MATCH_LINE" ]; then
-                                    # Extract just filename:line:match
-                                    DISPLAY=$(echo "$MATCH_LINE" | sed "s|^$BRANCH:||")
-                                    echo "      $DISPLAY" | cut -c1-100
-                                fi
+                                echo "      📄 $file:"
+                                # Show all matching lines in this file
+                                git grep -n "$PATTERN" "$BRANCH" -- "$file" 2>/dev/null | while IFS= read -r match; do
+                                    # Extract line number and match content
+                                    LINE_INFO=$(echo "$match" | sed "s|^$BRANCH:$file:||")
+                                    # Format as "line 123: content"
+                                    LINE_NUM=$(echo "$LINE_INFO" | cut -d: -f1)
+                                    LINE_CONTENT=$(echo "$LINE_INFO" | cut -d: -f2-)
+                                    echo "         line $LINE_NUM: $LINE_CONTENT" | cut -c1-80
+                                done | head -5  # Limit to 5 matches per file
                             fi
                         done <<< "$CONTENT_MATCHES"
                     fi
@@ -757,43 +792,71 @@ if [ $# -gt 0 ]; then
             CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
             CURRENT_HEAD=$(git rev-parse HEAD 2>/dev/null || exit 0)
             
-            # Display timeline using shared function
-            if ! display_timeline "$CURRENT_BRANCH" "$CURRENT_HEAD"; then
-                exit 0
-            fi
-            
-            echo ""
-            
-            # Always prompt for selection (ignore any arguments)
-            read -p "Select timeline number to travel to (0-$((${#TIMELINES[@]} - 1)), or press Enter to cancel): " SELECTION
-            
-            # Handle quit - accept empty input, q, or other quit patterns
-            if [ -z "$SELECTION" ] || [ "$SELECTION" = "q" ] || [ "$SELECTION" = "Q" ] || [ "$SELECTION" = "quit" ] || [ "$SELECTION" = "exit" ] || [ "$SELECTION" = "cancel" ]; then
-                echo "Cancelled."
-                exit 0
-            fi
-            
-            # Check if argument is a number (timeline) or commit ID
-            if [[ "$SELECTION" =~ ^[0-9]+$ ]]; then
-                # Validate number is in range
-                if [ "$SELECTION" -lt 0 ] || [ "$SELECTION" -ge ${#TIMELINES[@]} ]; then
-                    echo "Invalid selection. Please choose 0-$((${#TIMELINES[@]} - 1))"
-                    exit 1
+            # Outer loop for timeline selection
+            while true; do
+                # Display timeline using shared function
+                if ! display_timeline "$CURRENT_BRANCH" "$CURRENT_HEAD"; then
+                    exit 0
                 fi
                 
-                # Get the selected timeline
-                TIMELINE_BRANCH="${TIMELINES[$SELECTION]}"
+                echo ""
                 
-                echo "🔄 Traveling to timeline: $TIMELINE_BRANCH"
+                # Always prompt for selection (ignore any arguments)
+                read -p "Select timeline number to travel to (0-$((${#TIMELINES[@]} - 1)), or press Enter to exit): " SELECTION
+                
+                # Handle quit - accept empty input
+                if [ -z "$SELECTION" ]; then
+                    echo "Exiting travel mode."
+                    exit 0
+                fi
+                
+                # Check if argument is a number (timeline) or commit ID
+                if [[ "$SELECTION" =~ ^[0-9]+$ ]]; then
+                    # Validate number is in range
+                    if [ "$SELECTION" -lt 0 ] || [ "$SELECTION" -ge ${#TIMELINES[@]} ]; then
+                        echo "Invalid selection. Please choose 0-$((${#TIMELINES[@]} - 1))"
+                        echo ""
+                        continue
+                    fi
+                    
+                    # Convert display index to array index
+                    # Display: 0=oldest, highest=newest
+                    # Array: 0=newest, highest=oldest  
+                    ARRAY_INDEX=$((${#TIMELINES[@]} - 1 - SELECTION))
+                    TIMELINE_BRANCH="${TIMELINES[$ARRAY_INDEX]}"
+                
+                # Show preview of what will change
+                echo ""
+                echo "📋 Preview of changes when traveling to this timeline:"
+                echo "───────────────────────────────────────────────────────"
+                
+                # Use shared function to display changes
+                display_timeline_changes "$TIMELINE_BRANCH" "HEAD"
+                
+                # Show summary stats
+                STATS=$(git diff --shortstat HEAD "$TIMELINE_BRANCH" 2>/dev/null)
+                if [ -n "$STATS" ]; then
+                    echo ""
+                    echo "   Summary: $STATS"
+                fi
+                echo "───────────────────────────────────────────────────────"
                 
                 # Get the timeline commit SHA
                 TIMELINE_SHA=$(git rev-parse "$TIMELINE_BRANCH")
                 
-                # Option 1: Full restore - completely replace working directory with timeline
-                # This is destructive but exact
-                read -p "⚠️  This will travel to the timeline state. Continue? (y/N): " -n 1 -r
-                echo
-                if [[ $REPLY =~ ^[Yy]$ ]]; then
+                # Inner loop for confirmation
+                while true; do
+                    # Option 1: Full restore - completely replace working directory with timeline
+                    # This is destructive but exact
+                    echo ""
+                    read -p "⚠️  Travel to this timeline? (y to confirm, Enter to go back): " -n 1 -r
+                    echo
+                    
+                    if [ -z "$REPLY" ]; then
+                        # Enter pressed - go back to timeline selection
+                        echo ""
+                        break
+                    elif [[ $REPLY =~ ^[Yy]$ ]]; then
                     # Check if there are any changes to backup
                     if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
                         # Save current work as a backup timeline first
@@ -833,9 +896,15 @@ if [ $# -gt 0 ]; then
                     echo "💡 Your staged changes are preserved"
                     echo "💡 Use 'git status' to see all changes"
                     echo "💡 Use 'timeline travel' to see backup timeline"
-                else
-                    echo "Cancelled."
-                fi
+                    
+                    # Exit after successful travel
+                    exit 0
+                    else
+                        # User didn't confirm
+                        echo "Travel cancelled."
+                        break
+                    fi
+                done  # End inner confirmation loop
                 
             else
                 # Handle commit travel by commit ID
@@ -856,16 +925,18 @@ if [ $# -gt 0 ]; then
                 
                 git reset --hard "$SELECTION"
                 echo "✅ Reset to commit $SELECTION"
+                echo "💡 Use 'git status' to see the current state"
+                exit 0
             fi
-            
-            echo "💡 Use 'git status' to see the current state"
-            exit 0
+            done  # End outer while loop for timeline selection
             ;;
         *)
             echo "Usage:"
             echo "  timeline save             - Create a timeline manually"
             echo "  timeline travel           - Show timelines and travel interactively"
-            echo "  timeline view             - View timeline contents (browse, diff, search)"
+            echo "  timeline view             - Quick view all timelines with changes"
+            echo "  timeline browse           - Browse files in a specific timeline"
+            echo "  timeline search [pattern] - Search for text across timelines"
             echo "  timeline delete           - Delete timelines interactively"
             echo "  timeline cleanup          - Clean up timelines for deleted branches"
             echo "  timeline install          - Install hook to Claude Code"
@@ -878,7 +949,9 @@ else
     echo "Usage:"
     echo "  timeline save             - Create a timeline manually"
     echo "  timeline travel           - Show timelines and travel interactively"
-    echo "  timeline view             - View timeline contents (browse, diff, search)"
+    echo "  timeline view             - Quick view all timelines with changes"
+    echo "  timeline browse           - Browse files in a specific timeline"
+    echo "  timeline search [pattern] - Search for text across timelines"
     echo "  timeline delete           - Delete timelines interactively"
     echo "  timeline cleanup          - Clean up timelines for deleted branches"
     echo "  timeline install          - Install hook to Claude Code"
@@ -886,40 +959,47 @@ else
     exit 0
 fi
 
-# Check if there are any changes (staged, unstaged, or untracked files)
-# Exit silently if not in a git repo or no changes
-if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null || [ -n "$(git ls-files --others --exclude-standard 2>/dev/null)" ]; then
-    # Changes detected from HEAD, but check against last timeline too
-    CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
+# Check if we're in a git repo first
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+    # Not a git repo, exit silently
+    exit 0
+fi
+
+# Get current branch and last timeline
+CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
+LAST_TIMELINE=$(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null | grep -v '/backup-' | head -1)
+
+# Always check against last timeline if it exists
+if [ -n "$LAST_TIMELINE" ]; then
+    # Create a temporary index for the last timeline to compare untracked files
+    export GIT_INDEX_FILE=$(mktemp)
+    git read-tree "$LAST_TIMELINE" >/dev/null 2>&1
+    LAST_TREE=$(git write-tree 2>/dev/null)
+    rm -f $GIT_INDEX_FILE
+    unset GIT_INDEX_FILE
     
-    # Get the most recent timeline for this branch (excluding backups)
-    LAST_TIMELINE=$(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null | grep -v '/backup-' | head -1)
+    # Create a temporary index for current state
+    export GIT_INDEX_FILE=$(mktemp)
+    git read-tree HEAD >/dev/null 2>&1
+    git add --all >/dev/null 2>&1
+    CURRENT_TREE=$(git write-tree 2>/dev/null)
+    rm -f $GIT_INDEX_FILE
+    unset GIT_INDEX_FILE
     
-    if [ -n "$LAST_TIMELINE" ]; then
-        # Create a temporary index for the last timeline to compare untracked files
-        export GIT_INDEX_FILE=$(mktemp)
-        git read-tree "$LAST_TIMELINE" >/dev/null 2>&1
-        LAST_TREE=$(git write-tree 2>/dev/null)
-        rm -f $GIT_INDEX_FILE
-        unset GIT_INDEX_FILE
-        
-        # Create a temporary index for current state
-        export GIT_INDEX_FILE=$(mktemp)
-        git read-tree HEAD >/dev/null 2>&1
-        git add --all >/dev/null 2>&1
-        CURRENT_TREE=$(git write-tree 2>/dev/null)
-        rm -f $GIT_INDEX_FILE
-        unset GIT_INDEX_FILE
-        
-        # If the trees are identical, no changes since last timeline
-        if [ "$LAST_TREE" = "$CURRENT_TREE" ]; then
-            # No changes since last timeline, exit silently
-            exit 0
-        fi
+    # If the trees are identical, no changes since last timeline
+    if [ "$LAST_TREE" = "$CURRENT_TREE" ]; then
+        # No changes since last timeline, exit silently
+        exit 0
     fi
 else
-    # No changes or not a git repo, exit silently
-    exit 0
+    # No previous timeline exists, check if there are any changes from HEAD
+    if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null || [ -n "$(git ls-files --others --exclude-standard 2>/dev/null)" ]; then
+        # Changes exist, continue to create timeline
+        :
+    else
+        # No changes from HEAD and no previous timeline, exit silently
+        exit 0
+    fi
 fi
 
 # Get current branch name and working directory info
