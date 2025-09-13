@@ -101,16 +101,22 @@ esac
 echo ""
 echo "Installing Claude Code hook for automatic snapshots..."
 
-# Use the timeline script to install its own hook
-if [ "$INSTALL_METHOD" = "4" ]; then
-    # If not in PATH, use the full path
-    "$TIMELINE_SCRIPT" install
+# Use timeline command to install hooks
+if [ "$INSTALL_METHOD" = "1" ] || [ "$INSTALL_METHOD" = "2" ]; then
+    # Timeline should be in PATH now, use it directly
+    if command -v timeline &> /dev/null; then
+        timeline install
+    else
+        echo "⚠️  Timeline not found in PATH yet. You may need to restart your terminal."
+        echo "   Then run: timeline install"
+    fi
+elif [ "$INSTALL_METHOD" = "3" ]; then
+    echo "⚠️  Timeline not in PATH yet. After adding to PATH and reloading shell, run:"
+    echo "   timeline install"
 else
-    # If in PATH, we can use the command directly
-    timeline install || "$TIMELINE_SCRIPT" install
+    # Method 4: Not in PATH, use full path
+    "$TIMELINE_SCRIPT" install
 fi
-
-echo "✅ Claude Code hook installed - snapshots will be created automatically after each file edit"
 
 # Test installation
 echo ""

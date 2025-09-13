@@ -139,7 +139,11 @@ if [ $# -gt 0 ]; then
             
             # Install hook using jq (similar to claude-lsp-cli installer)
             if command -v jq &> /dev/null; then
-                # Add to existing PostToolUse hooks - append to first element's hooks array
+                # Add to BOTH PreToolUse and PostToolUse hooks
+                # PreToolUse catches state before destructive commands (git checkout, etc)
+                # PostToolUse catches state after file edits
+                
+                # First, add to PostToolUse
                 jq --arg cmd "$SCRIPT_PATH save" '.hooks.PostToolUse = ((.hooks.PostToolUse // []) | 
                     if length > 0 and .[0].hooks then
                         if (.[0].hooks | map(.command) | any(contains("timeline"))) then
@@ -149,10 +153,28 @@ if [ $# -gt 0 ]; then
                         end
                     else
                         . + [{"hooks": [{"type": "command", "command": $cmd}]}]
-                    end)' "$SETTINGS_FILE.backup" > "$SETTINGS_FILE"
+                    end)' "$SETTINGS_FILE.backup" > "$SETTINGS_FILE.tmp"
                 
-                rm -f "$SETTINGS_FILE.backup"
-                echo "✅ Installed timeline hook to settings.json"
+                # Then, add to PreToolUse (for Bash commands that might destroy changes)
+                jq --arg cmd "$SCRIPT_PATH save" '.hooks.PreToolUse = ((.hooks.PreToolUse // []) | 
+                    if length > 0 then
+                        # Look for Bash matcher
+                        map(if .matcher == "Bash" then
+                            if (.hooks | map(.command) | any(contains("timeline"))) then
+                                .
+                            else
+                                .hooks += [{"type": "command", "command": $cmd}]
+                            end
+                        else
+                            .
+                        end)
+                    else
+                        # Create new PreToolUse with Bash matcher
+                        . + [{"matcher": "Bash", "hooks": [{"type": "command", "command": $cmd}]}]
+                    end)' "$SETTINGS_FILE.tmp" > "$SETTINGS_FILE"
+                
+                rm -f "$SETTINGS_FILE.backup" "$SETTINGS_FILE.tmp"
+                echo "✅ Installed timeline hooks to settings.json (Pre and Post)"
             else
                 echo "⚠️  jq not found - please manually add hook to settings.json:"
                 echo "  Add to PostToolUse hooks array: {\"type\": \"command\", \"command\": \"$SCRIPT_PATH save\"}"
@@ -205,12 +227,20 @@ if [ $# -gt 0 ]; then
             
             # Remove hook using jq (similar to claude-lsp-cli installer logic)
             if command -v jq &> /dev/null; then
-                # Remove any timeline hook commands (flexible pattern matching)
+                # Remove timeline hooks from both PostToolUse and PreToolUse
                 jq '.hooks.PostToolUse = ((.hooks.PostToolUse // []) | 
-                    map(.hooks = (.hooks | map(select(.command | test("timeline") | not)))))' "$SETTINGS_FILE.backup" > "$SETTINGS_FILE"
+                    map(.hooks = (.hooks | map(select(.command | test("timeline") | not)))))' "$SETTINGS_FILE.backup" > "$SETTINGS_FILE.tmp"
                 
-                rm -f "$SETTINGS_FILE.backup"
-                echo "✅ Timeline hook removed from settings.json"
+                # Also remove from PreToolUse
+                jq '.hooks.PreToolUse = ((.hooks.PreToolUse // []) | 
+                    map(if .hooks then 
+                        .hooks = (.hooks | map(select(.command | test("timeline") | not)))
+                    else 
+                        . 
+                    end))' "$SETTINGS_FILE.tmp" > "$SETTINGS_FILE"
+                
+                rm -f "$SETTINGS_FILE.backup" "$SETTINGS_FILE.tmp"
+                echo "✅ Timeline hooks removed from settings.json (Pre and Post)"
             else
                 echo "⚠️  jq not found - please manually remove hook from settings.json"
                 echo "Look for: {\"type\": \"command\", \"command\": \"$SCRIPT_PATH save\"}"
@@ -804,8 +834,7 @@ if [ $# -gt 0 ]; then
             echo "Usage:"
             echo "  timeline save             - Create a timeline manually"
             echo "  timeline travel           - Show timelines and travel interactively"
-            echo "  timeline view             - View timeline contents (files, changes, diffs)"
-            echo "  timeline search <pattern> - Search for pattern in timelines"
+            echo "  timeline view             - View timeline contents (browse, diff, search)"
             echo "  timeline delete           - Delete timelines interactively"
             echo "  timeline cleanup          - Clean up timelines for deleted branches"
             echo "  timeline install          - Install hook to Claude Code"
@@ -818,8 +847,7 @@ else
     echo "Usage:"
     echo "  timeline save             - Create a timeline manually"
     echo "  timeline travel           - Show timelines and travel interactively"
-    echo "  timeline view             - View timeline contents (files, changes, diffs)"
-    echo "  timeline search <pattern> - Search for pattern in timelines"
+    echo "  timeline view             - View timeline contents (browse, diff, search)"
     echo "  timeline delete           - Delete timelines interactively"
     echo "  timeline cleanup          - Clean up timelines for deleted branches"
     echo "  timeline install          - Install hook to Claude Code"
