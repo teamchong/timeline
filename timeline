@@ -22,8 +22,8 @@ display_timeline() {
     echo "⏰ Timeline for branch '$CURRENT_BRANCH':"
     echo ""
     
-    # Get all timeline entries sorted by date (newest first)
-    TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null | head -20))
+    # Get all timeline entries sorted by date (newest first), excluding backups
+    TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null | grep -v '/backup-' | head -20))
     
     if [ ${#TIMELINES[@]} -eq 0 ]; then
         echo "No timeline entries found for branch '$CURRENT_BRANCH'"
@@ -238,7 +238,7 @@ if [ $# -gt 0 ]; then
             fi
             
             # Get timeline count for options
-            TIMELINE_COUNT=$(git for-each-ref --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null | wc -l | tr -d ' ')
+            TIMELINE_COUNT=$(git for-each-ref --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null | grep -v '/backup-' | wc -l | tr -d ' ')
             
             echo ""
             echo "Options:"
@@ -262,7 +262,7 @@ if [ $# -gt 0 ]; then
                         read -p "Are you sure? (y/N): " -n 1 -r
                         echo
                         if [[ $REPLY =~ ^[Yy]$ ]]; then
-                            git for-each-ref --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" | \
+                            git for-each-ref --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" | grep -v '/backup-' | \
                                 xargs -I {} git branch -D {} >/dev/null 2>&1
                             echo "✅ Deleted $TIMELINE_COUNT timelines"
                         else
@@ -733,22 +733,27 @@ if [ $# -gt 0 ]; then
                 read -p "⚠️  This will travel to the timeline state. Continue? (y/N): " -n 1 -r
                 echo
                 if [[ $REPLY =~ ^[Yy]$ ]]; then
-                    # Save current work as a backup timeline first
-                    echo "📸 Creating backup timeline before time travel..."
-                    BACKUP_TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
-                    BACKUP_MSG="timeline-backup: before-travel@$BACKUP_TIMESTAMP"
-                    
-                    # Create backup using same plumbing approach
-                    export GIT_INDEX_FILE=$(mktemp)
-                    git read-tree HEAD >/dev/null 2>&1
-                    git add --all >/dev/null 2>&1
-                    BACKUP_TREE=$(git write-tree)
-                    BACKUP_COMMIT=$(echo "$BACKUP_MSG" | git commit-tree $BACKUP_TREE -p HEAD)
-                    git update-ref "refs/heads/timelines/$CURRENT_BRANCH/backup-$BACKUP_TIMESTAMP" $BACKUP_COMMIT >/dev/null 2>&1
-                    rm -f $GIT_INDEX_FILE
-                    unset GIT_INDEX_FILE
-                    
-                    echo "✅ Backup created: timelines/$CURRENT_BRANCH/backup-$BACKUP_TIMESTAMP"
+                    # Check if there are any changes to backup
+                    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+                        # Save current work as a backup timeline first
+                        echo "📸 Creating backup timeline before time travel..."
+                        BACKUP_TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+                        BACKUP_MSG="timeline-backup: before-travel@$BACKUP_TIMESTAMP"
+                        
+                        # Create backup using same plumbing approach
+                        export GIT_INDEX_FILE=$(mktemp)
+                        git read-tree HEAD >/dev/null 2>&1
+                        git add --all >/dev/null 2>&1
+                        BACKUP_TREE=$(git write-tree)
+                        BACKUP_COMMIT=$(echo "$BACKUP_MSG" | git commit-tree $BACKUP_TREE -p HEAD)
+                        git update-ref "refs/heads/timelines/$CURRENT_BRANCH/backup-$BACKUP_TIMESTAMP" $BACKUP_COMMIT >/dev/null 2>&1
+                        rm -f $GIT_INDEX_FILE
+                        unset GIT_INDEX_FILE
+                        
+                        echo "✅ Backup created: timelines/$CURRENT_BRANCH/backup-$BACKUP_TIMESTAMP"
+                    else
+                        echo "ℹ️  No changes to backup (working directory is clean)"
+                    fi
                     
                     # Now restore from timeline to working directory only (preserve staging area)
                     # Use git restore with --worktree flag (Git 2.23+) or fallback to checkout
