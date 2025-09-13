@@ -892,8 +892,8 @@ if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null || 
     # Changes detected from HEAD, but check against last timeline too
     CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
     
-    # Get the most recent timeline for this branch
-    LAST_TIMELINE=$(git for-each-ref --sort=-committerdate --count=1 --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null)
+    # Get the most recent timeline for this branch (excluding backups)
+    LAST_TIMELINE=$(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null | grep -v '/backup-' | head -1)
     
     if [ -n "$LAST_TIMELINE" ]; then
         # Create a temporary index for the last timeline to compare untracked files
