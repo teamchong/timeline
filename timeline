@@ -1059,12 +1059,6 @@ TIMELINE_COMMIT=$(echo "$TIMELINE_MSG" | git commit-tree $TREE_SHA -p $CURRENT_H
 # Step 7: Create a branch reference for this timeline
 git update-ref "refs/heads/$TIMELINE_BRANCH" $TIMELINE_COMMIT >/dev/null 2>&1
 
-# Clean up old timeline branches (keep last 20)
-OLD_TIMELINES=$(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" | tail -n +21)
-if [ -n "$OLD_TIMELINES" ]; then
-    echo "$OLD_TIMELINES" | xargs -I {} git branch -D {} >/dev/null 2>&1 || true
-fi
-
 # Clean up temp index
 rm -f $GIT_INDEX_FILE
 unset GIT_INDEX_FILE
