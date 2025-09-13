@@ -118,8 +118,8 @@ Each timeline shows:
 ## How It Works
 
 Timeline uses Git's plumbing commands to create lightweight branches in `refs/heads/timelines/` that:
-- Don't appear in `git branch` listings
-- Don't affect your working directory
+- Are organized under `timelines/` prefix to keep them separate
+- Don't affect your working directory or HEAD
 - Don't interfere with normal Git operations
 - Are automatically cleaned up (keeps last 20)
 
