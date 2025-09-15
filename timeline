@@ -1136,7 +1136,7 @@ if [ $# -gt 0 ]; then
             rm -f "$TIMELINE_FILE"
             ;;
         "browse")
-            # Browse files in a specific timeline
+            # Browse diffs using Git's configured diff tool
             CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
             CURRENT_HEAD=$(git rev-parse HEAD 2>/dev/null)
             
@@ -1151,12 +1151,32 @@ if [ $# -gt 0 ]; then
                 fi
             done
             
-            # Outer loop for timeline selection
-            while true; do
-                # Use the same display function as travel
-                display_timeline "$CURRENT_BRANCH" "$CURRENT_HEAD"
+            if [ ${#TIMELINES[@]} -eq 0 ]; then
+                echo "No timelines with changes found."
+                exit 0
+            fi
+            
+            # Check if difftool is configured
+            DIFF_TOOL=$(git config diff.tool 2>/dev/null)
+            if [ -z "$DIFF_TOOL" ]; then
+                echo "⚠️  No diff tool configured. Set one with:"
+                echo "   git config --global diff.tool <tool>"
+                echo "   Popular options: vscode, meld, vimdiff, opendiff"
                 echo ""
-                read -p "Select timeline number to browse (or press Enter to exit): " TIMELINE_NUM
+                echo "Falling back to terminal diff view..."
+                echo ""
+            fi
+            
+            # Interactive timeline selection for difftool
+            echo "🔧 Git Diff Tool Browser"
+            echo "========================"
+            if ! display_timeline "$CURRENT_BRANCH" "$CURRENT_HEAD"; then
+                exit 0
+            fi
+            echo ""
+            
+            while true; do
+                read -p "Select timeline number to open in diff tool (or press Enter to exit): " TIMELINE_NUM
                 
                 if [ -z "$TIMELINE_NUM" ]; then
                     echo "Exiting browse mode."
@@ -1170,73 +1190,193 @@ if [ $# -gt 0 ]; then
                 fi
                 
                 # Convert display index to array index
-                # Display: 0=oldest, highest=newest
-                # Array: 0=newest, highest=oldest
                 ARRAY_INDEX=$((${#TIMELINES[@]} - 1 - TIMELINE_NUM))
-                
-                # Show files in selected timeline
                 BRANCH="${TIMELINES[$ARRAY_INDEX]}"
                 
-                # Inner loop to allow viewing multiple files
-                while true; do
                 echo ""
-                echo "Files different from current workspace in timeline $TIMELINE_NUM:"
-                # Only show files that are different from HEAD and have actual diff content
-                POTENTIAL_FILES=$(git diff --name-only HEAD "$BRANCH" 2>/dev/null)
-                FILE_ARRAY=()
+                echo "Opening timeline #$TIMELINE_NUM in diff tool..."
                 
-                if [ -n "$POTENTIAL_FILES" ]; then
-                    # Double-check each file has actual diff content
-                    while IFS= read -r file; do
-                        if [ -n "$(git diff HEAD "$BRANCH" -- "$file" 2>/dev/null)" ]; then
-                            FILE_ARRAY+=("$file")
-                        fi
-                    done <<< "$POTENTIAL_FILES"
-                fi
-                
-                if [ ${#FILE_ARRAY[@]} -gt 0 ]; then
-                    
-                    # Display files with numbers
-                    for idx in "${!FILE_ARRAY[@]}"; do
-                        printf "  %2d) %s\n" "$((idx + 1))" "${FILE_ARRAY[$idx]}"
-                    done
-                    
-                    echo ""
-                    read -p "Select file number to view diff (or press Enter to go back): " FILE_NUM
-                    
-                    if [ -z "$FILE_NUM" ]; then
-                        # Enter pressed - go back to timeline selection
-                        break
-                    elif [ "$FILE_NUM" -ge 1 ] && [ "$FILE_NUM" -le "${#FILE_ARRAY[@]}" ] 2>/dev/null; then
-                        SELECTED_FILE="${FILE_ARRAY[$((FILE_NUM - 1))]}"
+                if [ -n "$DIFF_TOOL" ]; then
+                    # Get changed files
+                    changed_files=$(git diff --name-only HEAD "$BRANCH" 2>/dev/null)
+                    if [ -n "$changed_files" ]; then
+                        file_count=$(echo "$changed_files" | wc -l | tr -d ' ')
+                        echo "Changed files ($file_count):"
+                        echo "$changed_files" | nl -w2 -s') '
                         echo ""
-                        echo "Diff for $SELECTED_FILE (compared to current workspace):"
-                        echo "───────────────────────────────────────────────────────"
-                        # Always compare against current HEAD to show what would change
-                        # Use --color=always to force colors even in pipes
-                        DIFF_OUTPUT=$(git diff --color=always HEAD "$BRANCH" -- "$SELECTED_FILE" 2>/dev/null)
                         
-                        if [ -n "$DIFF_OUTPUT" ]; then
-                            # Show the diff with colors and context
-                            echo "$DIFF_OUTPUT"
-                            echo "───────────────────────────────────────────────────────"
-                            echo "Legend: $(tput setaf 1)- removed from current$(tput sgr0) | $(tput setaf 2)+ added in timeline$(tput sgr0)"
-                        else
-                            echo "  (no changes - file is identical to current workspace)"
-                        fi
-                        
-                        # Wait for user to press Enter before showing file list again
-                        echo ""
-                        read -p "Press Enter to continue..."
+                        case "$DIFF_TOOL" in
+                            "cursor")
+                                # Cursor: let user select which file to diff
+                                echo "Select file to view in Cursor:"
+                                echo ""
+                                
+                                # Convert to array and display with proper formatting (bash 3.2 compatible)
+                                file_array=()
+                                while IFS= read -r file; do
+                                    if [ -n "$file" ]; then
+                                        file_array+=("$file")
+                                    fi
+                                done <<< "$changed_files"
+                                
+                                if [ ${#file_array[@]} -gt 0 ]; then
+                                    # Display files with simple numbering
+                                    for i in "${!file_array[@]}"; do
+                                        printf "  %d) %s\n" $((i + 1)) "${file_array[i]}"
+                                    done
+                                    echo ""
+                                    echo "  a) Open all files (sequentially)"
+                                    echo "  q) Go back to timeline selection"
+                                    echo ""
+                                    
+                                    while true; do
+                                        read -p "Select file number (1-${#file_array[@]}) or option: " choice
+                                        
+                                        if [ "$choice" = "q" ] || [ "$choice" = "Q" ] || [ -z "$choice" ]; then
+                                            break
+                                        elif [ "$choice" = "a" ] || [ "$choice" = "A" ]; then
+                                            # Open all files sequentially
+                                            echo "Opening all ${#file_array[@]} files..."
+                                            for file in "${file_array[@]}"; do
+                                                echo "📄 Opening: $file"
+                                                git difftool --no-prompt HEAD "$BRANCH" -- "$file"
+                                            done
+                                            break
+                                        elif [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#file_array[@]} ]; then
+                                            selected_file="${file_array[$((choice - 1))]}"
+                                            echo "📄 Opening: $selected_file"
+                                            
+                                            # Create temporary files for Cursor (bypass git difftool)
+                                            TEMP_DIR=$(mktemp -d)
+                                            # Clean basename as well to avoid issues
+                                            clean_basename=$(basename "$selected_file" | tr -d '\\')
+                                            HEAD_FILE="$TEMP_DIR/current_$clean_basename"
+                                            TIMELINE_FILE="$TEMP_DIR/timeline_$clean_basename"
+                                            
+                                            # Clean the filename of escape characters
+                                            clean_file=$(echo "$selected_file" | tr -d '\\')
+                                            echo "Selected: $selected_file"
+                                            echo "Cleaned: $clean_file"
+                                            
+                                            # Extract files
+                                            if git cat-file -e "HEAD:$clean_file" 2>/dev/null; then
+                                                git show "HEAD:$clean_file" > "$HEAD_FILE"
+                                                echo "Extracted current version"
+                                            else
+                                                echo "# File not in current version" > "$HEAD_FILE"
+                                                echo "Current version not found"
+                                            fi
+                                            
+                                            if git cat-file -e "$BRANCH:$clean_file" 2>/dev/null; then
+                                                git show "$BRANCH:$clean_file" > "$TIMELINE_FILE"
+                                                echo "Extracted timeline version"
+                                            else
+                                                echo "# File not in timeline version" > "$TIMELINE_FILE"
+                                                echo "Timeline version not found"
+                                            fi
+                                            
+                                            # Verify temp files exist
+                                            echo "Temp files created:"
+                                            echo "  HEAD: $HEAD_FILE ($([ -f "$HEAD_FILE" ] && echo "exists" || echo "missing"))"
+                                            echo "  TIMELINE: $TIMELINE_FILE ($([ -f "$TIMELINE_FILE" ] && echo "exists" || echo "missing"))"
+                                            
+                                            # Use configured diff tool with our temp files
+                                            DIFF_CMD=$(git config difftool.${DIFF_TOOL}.cmd)
+                                            if [ -n "$DIFF_CMD" ]; then
+                                                # Replace $LOCAL and $REMOTE with our temp files
+                                                ACTUAL_CMD=$(echo "$DIFF_CMD" | sed "s|\$LOCAL|\"$HEAD_FILE\"|g" | sed "s|\$REMOTE|\"$TIMELINE_FILE\"|g")
+                                                echo "Running: $ACTUAL_CMD"
+                                                echo "Files before launching:"
+                                                ls -la "$HEAD_FILE" "$TIMELINE_FILE"
+                                                echo "File contents preview:"
+                                                echo "=== HEAD file (first 3 lines) ==="
+                                                head -3 "$HEAD_FILE"
+                                                echo "=== TIMELINE file (first 3 lines) ==="
+                                                head -3 "$TIMELINE_FILE"
+                                                echo "========================="
+                                                
+                                                eval "$ACTUAL_CMD" &
+                                                CURSOR_PID=$!
+                                                echo "Diff tool launched with PID $CURSOR_PID, keeping files alive..."
+                                                echo "Temp directory: $TEMP_DIR"
+                                                echo "Press Enter after you close the diff tool to cleanup..."
+                                                read -p ""
+                                            else
+                                                echo "⚠️  No diff command configured for $DIFF_TOOL"
+                                                echo "Files available at:"
+                                                echo "  Current: $HEAD_FILE"
+                                                echo "  Timeline: $TIMELINE_FILE"
+                                            fi
+                                            
+                                            # Clean up
+                                            rm -rf "$TEMP_DIR"
+                                            echo ""
+                                            echo "Select another file or 'q' to go back:"
+                                        else
+                                            echo "Invalid choice. Enter 1-${#file_array[@]}, 'a' for all, or 'q' to go back."
+                                        fi
+                                    done
+                                else
+                                    echo "No changed files found."
+                                fi
+                                ;;
+                            "vscode"|"code")
+                                # VS Code: use standard difftool
+                                echo "Opening files in VS Code (one by one)..."
+                                echo "$changed_files" | while IFS= read -r file; do
+                                    echo "📄 Opening: $file"
+                                    git difftool --no-prompt HEAD "$BRANCH" -- "$file"
+                                done
+                                ;;
+                            "zed")
+                                # Zed: open files sequentially
+                                echo "Opening files in Zed (one by one)..."
+                                echo "$changed_files" | while IFS= read -r file; do
+                                    echo "📄 Opening: $file"
+                                    git difftool --no-prompt HEAD "$BRANCH" -- "$file"
+                                done
+                                ;;
+                            "meld")
+                                # Meld: supports directory diff
+                                echo "Opening directory diff in Meld..."
+                                git difftool --dir-diff --no-prompt HEAD "$BRANCH"
+                                ;;
+                            "vimdiff"|"nvim"|"vim")
+                                # Vim: open files sequentially (vim doesn't handle multiple diffs well)
+                                echo "Opening files in Vim diff (one by one)..."
+                                echo "$changed_files" | while IFS= read -r file; do
+                                    echo "📄 Opening: $file (press :qa to exit and continue)"
+                                    git difftool --no-prompt HEAD "$BRANCH" -- "$file"
+                                done
+                                ;;
+                            "opendiff"|"FileMerge")
+                                # FileMerge (Mac): open files sequentially
+                                echo "Opening files in FileMerge (one by one)..."
+                                echo "$changed_files" | while IFS= read -r file; do
+                                    echo "📄 Opening: $file"
+                                    git difftool --no-prompt HEAD "$BRANCH" -- "$file"
+                                done
+                                ;;
+                            *)
+                                # Unknown diff tool: open files sequentially
+                                echo "Opening files in $DIFF_TOOL (one by one)..."
+                                echo "$changed_files" | while IFS= read -r file; do
+                                    echo "📄 Opening: $file"
+                                    git difftool --no-prompt HEAD "$BRANCH" -- "$file"
+                                done
+                                ;;
+                        esac
                     else
-                        echo "Invalid selection. Please choose 1-${#FILE_ARRAY[@]} or press Enter to go back."
+                        echo "No changed files found."
                     fi
                 else
-                    echo "  (no files with differences)"
-                    break
+                    # Fallback to git diff with pager
+                    git diff HEAD "$BRANCH" | ${PAGER:-less -R}
                 fi
-            done  # End inner loop (file selection)
-            done  # End outer loop (timeline selection)
+                
+                echo ""
+                echo "Diff tool closed. Select another timeline or press Enter to exit."
+            done
             ;;
         "search")
             # Search functionality
