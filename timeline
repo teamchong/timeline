@@ -114,7 +114,8 @@ get_current_claude_session() {
             # Find the most recent JSONL file (current or most recent session)
             local LATEST_JSONL=$(find "$PROJECT_PATH" -name "*.jsonl" -type f -exec stat -f "%m %N" {} \; 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
             if [ -f "$LATEST_JSONL" ]; then
-                echo "$LATEST_JSONL"
+                # Extract just the session ID (UUID) from the filename
+                basename "$LATEST_JSONL" .jsonl
                 return 0
             fi
         fi
@@ -915,7 +916,10 @@ if [ $# -gt 0 ]; then
                 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 echo "Session: $SELECTED_SESSION"
                 echo "Total Timelines: ${#TIMELINES[@]}"
-                echo "Time Range: $(git log -1 --pretty=format:"%ci" "${TIMELINES[-1]}" 2>/dev/null) to $(git log -1 --pretty=format:"%ci" "${TIMELINES[0]}" 2>/dev/null)"
+                if [ ${#TIMELINES[@]} -gt 0 ]; then
+                    LAST_IDX=$((${#TIMELINES[@]} - 1))
+                    echo "Time Range: $(git log -1 --pretty=format:"%ci" "${TIMELINES[$LAST_IDX]}" 2>/dev/null) to $(git log -1 --pretty=format:"%ci" "${TIMELINES[0]}" 2>/dev/null)"
+                fi
                 echo ""
                 echo "This view shows the complete conversation flow and resulting code changes."
                 echo "Each timeline represents a point where Claude made changes in response to user requests."
@@ -1566,6 +1570,13 @@ TIMELINE_COMMIT=$(echo "$TIMELINE_MSG" | git commit-tree $TREE_SHA -p $CURRENT_H
 
 # Step 7: Create a branch reference for this timeline
 git update-ref "refs/heads/$TIMELINE_BRANCH" $TIMELINE_COMMIT >/dev/null 2>&1
+
+# Step 8: Add git notes with session information
+CURRENT_SESSION=$(get_current_claude_session)
+if [ -n "$CURRENT_SESSION" ]; then
+    # Add the note to the timeline commit using -m flag (stdin doesn't work properly)
+    git notes --ref=timeline add -m "Session-Id: $CURRENT_SESSION" "$TIMELINE_COMMIT" 2>/dev/null || true
+fi
 
 # Clean up temp index
 rm -f $GIT_INDEX_FILE
