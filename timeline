@@ -804,8 +804,7 @@ if [ $# -gt 0 ]; then
                 exit 0
             fi
             
-            # Create detailed view content and open in editor
-            TIMELINE_FILE=$(mktemp)
+            # Display conversation directly (pipe to less for pagination if needed)
             {
                 echo "📋 Conversation & Timeline View"
                 echo "Session: $SELECTED_SESSION"
@@ -826,15 +825,16 @@ if [ $# -gt 0 ]; then
                 done
                 
                 if [ -f "$SESSION_FILE" ]; then
-                    # Keep track of timelines (simpler approach without associative arrays)
+                    echo "📖 Reading conversation from session file..."
+                    echo ""
                     
                     # Process conversation and interleave with timelines
                     MESSAGE_NUM=0
                     TIMELINE_INDEX=0
                     
                     while IFS= read -r line; do
-                        # Parse JSON line
-                        role=$(echo "$line" | jq -r '.role // empty' 2>/dev/null)
+                        # Parse JSON line - role is inside message object
+                        role=$(echo "$line" | jq -r '.message.role // empty' 2>/dev/null)
                         
                         if [ "$role" = "user" ]; then
                             MESSAGE_NUM=$((MESSAGE_NUM + 1))
@@ -1023,40 +1023,16 @@ if [ $# -gt 0 ]; then
                 echo ""
                 echo "This view shows the complete conversation flow and resulting code changes."
                 echo "Each timeline represents a point where Claude made changes in response to user requests."
-            } > "$TIMELINE_FILE"
-            
-            # Open in editor using git's configuration hierarchy:
-            # 1. GIT_EDITOR environment variable
-            # 2. core.editor git config
-            # 3. VISUAL environment variable  
-            # 4. EDITOR environment variable
-            # 5. Default fallbacks
-            EDITOR_CMD=""
-            
-            if [ -n "$GIT_EDITOR" ]; then
-                EDITOR_CMD="$GIT_EDITOR"
-            elif [ -n "$(git config --get core.editor 2>/dev/null)" ]; then
-                EDITOR_CMD="$(git config --get core.editor)"
-            elif [ -n "$VISUAL" ]; then
-                EDITOR_CMD="$VISUAL"
-            elif [ -n "$EDITOR" ]; then
-                EDITOR_CMD="$EDITOR"
-            elif command -v nano &> /dev/null; then
-                EDITOR_CMD="nano"
-            elif command -v vim &> /dev/null; then
-                EDITOR_CMD="vim"
-            elif command -v vi &> /dev/null; then
-                EDITOR_CMD="vi"
-            else
-                # Fallback to less for viewing only
-                EDITOR_CMD="less"
-            fi
-            
-            # Open the timeline view
-            $EDITOR_CMD "$TIMELINE_FILE"
-            
-            # Clean up
-            rm -f "$TIMELINE_FILE"
+            } | {
+                # Use less for pagination if output is large
+                if [ -t 1 ]; then
+                    # Output is to terminal, use pager for long content
+                    less -R 2>/dev/null || cat
+                else
+                    # Output is redirected, just cat it
+                    cat
+                fi
+            }
             ;;
         "browse")
             # Browse files in a specific timeline
