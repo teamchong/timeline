@@ -14,6 +14,165 @@ set -e
 # Auto-detect script location
 SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
+# Shared function to display session stats line
+display_session_stats() {
+    local session_id="$1"
+    local prefix="${2:-}"  # Optional prefix text
+    
+    # Try different possible paths for the session file
+    local session_file=""
+    for path in "$HOME/.claude/projects/-Users-steven-chong-Downloads-repos-timeline/${session_id}.jsonl" \
+                "$HOME/.claude/projects/"*"/${session_id}.jsonl"; do
+        if [ -f "$path" ]; then
+            session_file="$path"
+            break
+        fi
+    done
+    
+    if [ -f "$session_file" ]; then
+        # Get stats: timestamp, total messages, user prompts
+        # Find first line with timestamp (not all lines have it)
+        first_timestamp=$(grep -m 1 '"timestamp"' "$session_file" 2>/dev/null | jq -r '.timestamp // empty' 2>/dev/null)
+        total_lines=$(wc -l < "$session_file" 2>/dev/null | tr -d ' ')
+        user_messages=$(grep -c '"role":"user"' "$session_file" 2>/dev/null || echo "0")
+        
+        # Format stats line
+        if [ -n "$first_timestamp" ]; then
+            date_part=$(echo "$first_timestamp" | cut -d'T' -f1)
+            time_part=$(echo "$first_timestamp" | cut -d'T' -f2 | cut -d'.' -f1)
+            echo "${prefix}${date_part} ${time_part} | ${total_lines} messages, ${user_messages} user prompts"
+        else
+            echo "${prefix}Session: ${session_id} | ${total_lines} messages"
+        fi
+        
+        # Return the session file path for further use
+        echo "$session_file" > /tmp/timeline_session_file_$$
+        return 0
+    else
+        echo "${prefix}Session: ${session_id}"
+        return 1
+    fi
+}
+
+# Shared function to display first user message (2 lines)
+display_first_user_message() {
+    local session_file="$1"
+    local indent="${2:-  }"  # Default indent
+    
+    if [ -f "$session_file" ]; then
+        # Try different JSON structures for user messages
+        # Some have .message.content as string, some as array
+        first_user_msg=$(grep '"role":"user"' "$session_file" 2>/dev/null | head -1 | jq -r '
+            if .message.content | type == "string" then 
+                .message.content
+            elif .message.content | type == "array" then
+                .message.content[0].text // empty
+            else
+                empty
+            end' 2>/dev/null)
+        
+        if [ -n "$first_user_msg" ]; then
+            # Default to 120 characters width
+            WIDTH=120
+            # Reserve some space for indent and quotes
+            WIDTH=$((WIDTH - ${#indent} - 6))
+            
+            # Get first 2 lines, using available width (max 500)
+            line1=$(echo "$first_user_msg" | head -1 | cut -c1-${WIDTH})
+            line2=$(echo "$first_user_msg" | head -2 | tail -1 | cut -c1-${WIDTH})
+            
+            if [ -n "$line1" ]; then
+                echo "${indent}💬 \"${line1}"
+                if [ -n "$line2" ] && [ "$line1" != "$line2" ]; then
+                    echo "${indent}    ${line2}\""
+                else
+                    echo "${indent}    ...\""
+                fi
+            fi
+        fi
+    fi
+}
+
+# Function to find current Claude Code session JSONL
+get_current_claude_session() {
+    local PROJECT_DIR="$HOME/.claude/projects"
+    if [ -d "$PROJECT_DIR" ]; then
+        # Find the project directory that matches our current working directory
+        # Claude encodes paths but may have variations in encoding  
+        local CWD=$(pwd)
+        local PROJECT_PATH=""
+        
+        # Try different encoding patterns that Claude might use
+        for dir in "$PROJECT_DIR"/*; do
+            if [ -d "$dir" ] && [[ "$(basename "$dir")" == *"timeline"* ]]; then
+                PROJECT_PATH="$dir"
+                break
+            fi
+        done
+        
+        if [ -d "$PROJECT_PATH" ]; then
+            # Find the most recent JSONL file (current or most recent session)
+            local LATEST_JSONL=$(find "$PROJECT_PATH" -name "*.jsonl" -type f -exec stat -f "%m %N" {} \; 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
+            if [ -f "$LATEST_JSONL" ]; then
+                echo "$LATEST_JSONL"
+                return 0
+            fi
+        fi
+    fi
+    return 1
+}
+
+# Shared function to generate summary line format [+X ~Y -Z] visual +adds -dels lines
+generate_summary_line() {
+    local added_files="$1"
+    local modified_files="$2"
+    local removed_files="$3"
+    local adds="$4"
+    local dels="$5"
+    
+    # Build file breakdown like [+5 ~3 -1]
+    local file_breakdown="["
+    if [ "$added_files" -gt 0 ]; then
+        file_breakdown="${file_breakdown}+${added_files} "
+    fi
+    if [ "$modified_files" -gt 0 ]; then
+        file_breakdown="${file_breakdown}~${modified_files} "
+    fi
+    if [ "$removed_files" -gt 0 ]; then
+        file_breakdown="${file_breakdown}-${removed_files} "
+    fi
+    file_breakdown="${file_breakdown%% }]"
+    
+    # Create visual indicator
+    local visual=""
+    if [ "$adds" -gt 0 ]; then
+        if [ "$adds" -lt 10 ]; then
+            visual="${visual}$(printf -- '+%.0s' $(seq 1 $adds))"
+        elif [ "$adds" -lt 50 ]; then
+            visual="${visual}+++"
+        elif [ "$adds" -lt 100 ]; then
+            visual="${visual}+++++"
+        else
+            visual="${visual}+++++++"
+        fi
+    fi
+    
+    if [ "$dels" -gt 0 ]; then
+        if [ "$dels" -lt 10 ]; then
+            visual="${visual}$(printf -- '-%.0s' $(seq 1 $dels))"
+        elif [ "$dels" -lt 50 ]; then
+            visual="${visual}---"
+        elif [ "$dels" -lt 100 ]; then
+            visual="${visual}-----"
+        else
+            visual="${visual}-------"
+        fi
+    fi
+    
+    # Return the formatted line
+    echo "${file_breakdown}  ${visual}  +${adds} -${dels} lines"
+}
+
 # Shared function to display file changes for a timeline
 display_timeline_changes() {
     local BRANCH="$1"
@@ -38,47 +197,9 @@ display_timeline_changes() {
         ADDS=${ADDS:-0}
         DELS=${DELS:-0}
         
-        # Build file breakdown like [+5 ~3 -1]
-        file_breakdown="["
-        if [ "$added_files" -gt 0 ]; then
-            file_breakdown="${file_breakdown}+${added_files} "
-        fi
-        if [ "$modified_files" -gt 0 ]; then
-            file_breakdown="${file_breakdown}~${modified_files} "
-        fi
-        if [ "$removed_files" -gt 0 ]; then
-            file_breakdown="${file_breakdown}-${removed_files} "
-        fi
-        file_breakdown="${file_breakdown%% }]"
-        
-        # Create visual indicator
-        VISUAL=""
-        if [ "$ADDS" -gt 0 ]; then
-            if [ "$ADDS" -lt 10 ]; then
-                VISUAL="${VISUAL}$(printf -- '+%.0s' $(seq 1 $ADDS))"
-            elif [ "$ADDS" -lt 50 ]; then
-                VISUAL="${VISUAL}+++"
-            elif [ "$ADDS" -lt 100 ]; then
-                VISUAL="${VISUAL}+++++"
-            else
-                VISUAL="${VISUAL}+++++++"
-            fi
-        fi
-        
-        if [ "$DELS" -gt 0 ]; then
-            if [ "$DELS" -lt 10 ]; then
-                VISUAL="${VISUAL}$(printf -- '-%.0s' $(seq 1 $DELS))"
-            elif [ "$DELS" -lt 50 ]; then
-                VISUAL="${VISUAL}---"
-            elif [ "$DELS" -lt 100 ]; then
-                VISUAL="${VISUAL}-----"
-            else
-                VISUAL="${VISUAL}-------"
-            fi
-        fi
-        
-        # Show file breakdown, visual indicator, and line counts
-        printf "   %s  %s  +%d -%d lines\n" "$file_breakdown" "$VISUAL" "$ADDS" "$DELS"
+        # Use shared function to generate summary line
+        summary_line=$(generate_summary_line "$added_files" "$modified_files" "$removed_files" "$ADDS" "$DELS")
+        printf "   %s\n" "$summary_line"
     else
         printf "   (no changes)\n"
     fi
@@ -144,47 +265,9 @@ display_timeline() {
             ADDS=${ADDS:-0}
             DELS=${DELS:-0}
             
-            # Build file breakdown like [+5 ~3 -1]
-            file_breakdown="["
-            if [ "$added_files" -gt 0 ]; then
-                file_breakdown="${file_breakdown}+${added_files} "
-            fi
-            if [ "$modified_files" -gt 0 ]; then
-                file_breakdown="${file_breakdown}~${modified_files} "
-            fi
-            if [ "$removed_files" -gt 0 ]; then
-                file_breakdown="${file_breakdown}-${removed_files} "
-            fi
-            file_breakdown="${file_breakdown%% }]"
-            
-            # Create visual indicator
-            VISUAL=""
-            if [ "$ADDS" -gt 0 ]; then
-                if [ "$ADDS" -lt 10 ]; then
-                    VISUAL="${VISUAL}$(printf -- '+%.0s' $(seq 1 $ADDS))"
-                elif [ "$ADDS" -lt 50 ]; then
-                    VISUAL="${VISUAL}+++"
-                elif [ "$ADDS" -lt 100 ]; then
-                    VISUAL="${VISUAL}+++++"
-                else
-                    VISUAL="${VISUAL}+++++++"
-                fi
-            fi
-            
-            if [ "$DELS" -gt 0 ]; then
-                if [ "$DELS" -lt 10 ]; then
-                    VISUAL="${VISUAL}$(printf -- '-%.0s' $(seq 1 $DELS))"
-                elif [ "$DELS" -lt 50 ]; then
-                    VISUAL="${VISUAL}---"
-                elif [ "$DELS" -lt 100 ]; then
-                    VISUAL="${VISUAL}-----"
-                else
-                    VISUAL="${VISUAL}-------"
-                fi
-            fi
-            
-            # Show file breakdown, visual indicator, and line counts
-            printf "      %s  %s  +%d -%d lines\n" "$file_breakdown" "$VISUAL" "$ADDS" "$DELS"
+            # Use shared function to generate summary line
+            summary_line=$(generate_summary_line "$added_files" "$modified_files" "$removed_files" "$ADDS" "$DELS")
+            printf "      %s\n" "$summary_line"
         else
             printf "      (no changes)\n"
         fi
@@ -550,45 +633,326 @@ if [ $# -gt 0 ]; then
             done
             ;;
         "view")
-            # Quick view - show all timelines with file changes
+            # Session-based view - select session first, then view timelines
             CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
             CURRENT_HEAD=$(git rev-parse HEAD 2>/dev/null)
             
-            # Get all timeline branches and filter out those identical to HEAD
-            ALL_TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/*" 2>/dev/null))
-            TIMELINES=()
+            # First, let user select a session
+            echo "🗂️ Available Sessions:"
+            echo ""
             
-            # Filter out timelines that are identical to HEAD
+            # Get all timeline branches and extract unique session IDs
+            ALL_TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/*" 2>/dev/null))
+            SESSION_LIST=()
+            SEEN_SESSIONS=""
+            
             for timeline in "${ALL_TIMELINES[@]}"; do
-                if [ -n "$(git diff --name-only HEAD "$timeline" 2>/dev/null)" ]; then
-                    TIMELINES+=("$timeline")
+                # Get git notes to find session ID
+                commit_hash=$(git rev-parse "$timeline" 2>/dev/null)
+                if [ -n "$commit_hash" ]; then
+                    notes=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null || true)
+                    if [ -n "$notes" ]; then
+                        session_id=$(echo "$notes" | grep "^Session-Id:" | cut -d' ' -f2- | head -1)
+                        if [ -n "$session_id" ] && ! echo "$SEEN_SESSIONS" | grep -q "$session_id"; then
+                            SEEN_SESSIONS="$SEEN_SESSIONS $session_id"
+                            SESSION_LIST+=("$session_id")
+                        fi
+                    fi
+                fi
+            done
+            
+            # If no sessions found, fall back to current session
+            if [ ${#SESSION_LIST[@]} -eq 0 ]; then
+                CURRENT_SESSION=$(get_current_claude_session)
+                if [ -n "$CURRENT_SESSION" ]; then
+                    session_id=$(basename "$CURRENT_SESSION" .jsonl)
+                    SESSION_LIST=("$session_id")
+                else
+                    echo "No sessions found with timeline data"
+                    exit 0
+                fi
+            fi
+            
+            # If only one session, auto-select it
+            if [ ${#SESSION_LIST[@]} -eq 1 ]; then
+                SELECTED_SESSION="${SESSION_LIST[0]}"
+                
+                echo "Auto-selected session:"
+                # Use shared function to display stats
+                display_session_stats "$SELECTED_SESSION" "  "
+                
+                # Show timeline stats for this session (total file/line changes)
+                total_adds=0
+                total_dels=0
+                total_files=0
+                timeline_count=0
+                
+                for timeline in "${ALL_TIMELINES[@]}"; do
+                    commit_hash=$(git rev-parse "$timeline" 2>/dev/null)
+                    if [ -n "$commit_hash" ]; then
+                        # Check if this timeline belongs to this session
+                        notes=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null || true)
+                        if [ -n "$notes" ]; then
+                            session_id=$(echo "$notes" | grep "^Session-Id:" | cut -d' ' -f2- | head -1)
+                            if [ "$session_id" = "$SELECTED_SESSION" ] || [ -z "$session_id" ]; then
+                                # Count stats for this timeline
+                                STATS=$(git diff --shortstat HEAD "$timeline" 2>/dev/null | sed 's/files\? changed/files/' || echo "")
+                                if [ -n "$STATS" ]; then
+                                    adds=$(echo "$STATS" | grep -oE '[0-9]+ insertion' | grep -o '[0-9]*' | head -1)
+                                    dels=$(echo "$STATS" | grep -oE '[0-9]+ deletion' | grep -o '[0-9]*' | head -1)
+                                    files=$(echo "$STATS" | grep -oE '[0-9]+ file' | grep -o '[0-9]*' | head -1)
+                                    total_adds=$((total_adds + ${adds:-0}))
+                                    total_dels=$((total_dels + ${dels:-0}))
+                                    total_files=$((total_files + ${files:-0}))
+                                    timeline_count=$((timeline_count + 1))
+                                fi
+                            fi
+                        fi
+                    fi
+                done
+                
+                if [ "$timeline_count" -gt 0 ]; then
+                    echo "  📊 $timeline_count timelines | $total_files files changed | +$total_adds -$total_dels lines"
+                else
+                    echo "  📊 No timelines found for this session"
+                fi
+                echo ""
+            else
+                # Display sessions with helpful info for multiple sessions
+                echo "Multiple sessions found:"
+                echo ""
+                for i in "${!SESSION_LIST[@]}"; do
+                    session_id="${SESSION_LIST[$i]}"
+                    
+                    # Display session number and stats
+                    printf "  %2d) " "$i"
+                    display_session_stats "$session_id" ""
+                    
+                    # Show timeline stats for this session
+                    total_adds=0
+                    total_dels=0
+                    total_files=0
+                    timeline_count=0
+                    
+                    for timeline in "${ALL_TIMELINES[@]}"; do
+                        commit_hash=$(git rev-parse "$timeline" 2>/dev/null)
+                        if [ -n "$commit_hash" ]; then
+                            notes=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null || true)
+                            if [ -n "$notes" ]; then
+                                sid=$(echo "$notes" | grep "^Session-Id:" | cut -d' ' -f2- | head -1)
+                                if [ "$sid" = "$session_id" ] || [ -z "$sid" ]; then
+                                    STATS=$(git diff --shortstat HEAD "$timeline" 2>/dev/null | sed 's/files\? changed/files/' || echo "")
+                                    if [ -n "$STATS" ]; then
+                                        adds=$(echo "$STATS" | grep -oE '[0-9]+ insertion' | grep -o '[0-9]*' | head -1)
+                                        dels=$(echo "$STATS" | grep -oE '[0-9]+ deletion' | grep -o '[0-9]*' | head -1)
+                                        files=$(echo "$STATS" | grep -oE '[0-9]+ file' | grep -o '[0-9]*' | head -1)
+                                        total_adds=$((total_adds + ${adds:-0}))
+                                        total_dels=$((total_dels + ${dels:-0}))
+                                        total_files=$((total_files + ${files:-0}))
+                                        timeline_count=$((timeline_count + 1))
+                                    fi
+                                fi
+                            fi
+                        fi
+                    done
+                    
+                    if [ "$timeline_count" -gt 0 ]; then
+                        printf "      📊 %d timelines | %d files changed | +%d -%d lines\n" "$timeline_count" "$total_files" "$total_adds" "$total_dels"
+                    else
+                        printf "      📊 No timelines found\n"
+                    fi
+                    echo ""
+                done
+                
+                echo ""
+                read -p "Select session number (or press Enter for session 0): " SESSION_CHOICE
+                
+                # Default to 0 if empty
+                if [ -z "$SESSION_CHOICE" ]; then
+                    SESSION_CHOICE=0
+                fi
+                
+                # Validate choice
+                if [ "$SESSION_CHOICE" -ge 0 ] && [ "$SESSION_CHOICE" -lt ${#SESSION_LIST[@]} ] 2>/dev/null; then
+                    SELECTED_SESSION="${SESSION_LIST[$SESSION_CHOICE]}"
+                    echo "Selected session: $SELECTED_SESSION"
+                    echo ""
+                else
+                    echo "Invalid selection"
+                    exit 1
+                fi
+            fi
+            
+            # Get timelines for selected session
+            TIMELINES=()
+            for timeline in "${ALL_TIMELINES[@]}"; do
+                commit_hash=$(git rev-parse "$timeline" 2>/dev/null)
+                if [ -n "$commit_hash" ]; then
+                    notes=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null || true)
+                    if [ -n "$notes" ]; then
+                        session_id=$(echo "$notes" | grep "^Session-Id:" | cut -d' ' -f2- | head -1)
+                        if [ "$session_id" = "$SELECTED_SESSION" ] && [ -n "$(git diff --name-only HEAD "$timeline" 2>/dev/null)" ]; then
+                            TIMELINES+=("$timeline")
+                        fi
+                    fi
                 fi
             done
             
             if [ ${#TIMELINES[@]} -eq 0 ]; then
-                echo "No timelines with changes found for branch '$CURRENT_BRANCH'"
+                echo "No timelines with changes found for session '$SELECTED_SESSION'"
                 exit 0
             fi
             
-            echo "Found ${#TIMELINES[@]} timelines for branch '$CURRENT_BRANCH'"
-            echo ""
-            
-            # Display each timeline with changes
-            for ((i=${#TIMELINES[@]}-1; i>=0; i--)); do
-                # Calculate display index (0 = oldest, higher = newer)
-                DISPLAY_INDEX=$((${#TIMELINES[@]} - 1 - i))
-                BRANCH="${TIMELINES[$i]}"
-                
-                # Get timeline info
-                SUBJECT=$(git log -1 --pretty=format:"%s" "$BRANCH" 2>/dev/null)
-                timeline_info=$(echo "$SUBJECT" | sed 's/ - [0-9]* files$//')
-                
-                echo "📍 $timeline_info"
-                
-                # Use shared function to display changes
-                display_timeline_changes "$BRANCH" "HEAD"
+            # Create detailed view content and open in editor
+            TIMELINE_FILE=$(mktemp)
+            {
+                echo "📋 Full Conversation & Timeline View"
+                echo "Session: $SELECTED_SESSION"
+                echo "==============================================="
+                echo "Found ${#TIMELINES[@]} timelines with changes"
                 echo ""
-            done
+                
+                # Display each timeline with full conversation and commit details
+                for ((i=${#TIMELINES[@]}-1; i>=0; i--)); do
+                    # Calculate display index (0 = oldest, higher = newer)
+                    DISPLAY_INDEX=$((${#TIMELINES[@]} - 1 - i))
+                    BRANCH="${TIMELINES[$i]}"
+                    
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "📍 Timeline #$DISPLAY_INDEX"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    
+                    # Get commit details
+                    commit_hash=$(git rev-parse "$BRANCH" 2>/dev/null)
+                    commit_time=$(git log -1 --pretty=format:"%ci" "$BRANCH" 2>/dev/null)
+                    commit_msg=$(git log -1 --pretty=format:"%B" "$BRANCH" 2>/dev/null)
+                    
+                    echo "🕒 Time: $commit_time"
+                    echo "📝 Commit Message:"
+                    echo "$commit_msg" | sed 's/^/   /'
+                    echo ""
+                    
+                    # Get conversation from git notes
+                    notes=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null || true)
+                    
+                    if [ -n "$notes" ]; then
+                        # Extract conversation details from notes
+                        user_request=$(echo "$notes" | grep "^User-Request-Full:" | cut -d' ' -f2- | head -1)
+                        assistant_response=$(echo "$notes" | grep "^Assistant-Response-Full:" | cut -d' ' -f2- | head -1)
+                        transcript_path=$(echo "$notes" | grep "^Transcript-Path:" | cut -d' ' -f2- | head -1)
+                        parent_msg_id=$(echo "$notes" | grep "^Parent-Message-Id:" | cut -d' ' -f2- | head -1)
+                        
+                        # Show conversation
+                        echo "💬 Conversation Context:"
+                        echo "─────────────────────────"
+                        
+                        if [ -n "$user_request" ]; then
+                            echo "👤 User Request:"
+                            echo "$user_request" | sed 's/^/   /'
+                            echo ""
+                        fi
+                        
+                        if [ -n "$assistant_response" ]; then
+                            echo "🤖 Claude Response:"
+                            echo "$assistant_response" | sed 's/^/   /'
+                            echo ""
+                        fi
+                        
+                        # If no stored conversation, try to extract from transcript
+                        if [ -z "$user_request" ] && [ -z "$assistant_response" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
+                            echo "📖 Extracting conversation from transcript..."
+                            
+                            # Get user request
+                            full_user_request=$(get_full_user_request_from_jsonl "$transcript_path" "$parent_msg_id" 2>/dev/null)
+                            if [ -n "$full_user_request" ]; then
+                                echo "👤 User Request:"
+                                echo "$full_user_request" | head -10 | sed 's/^/   /'
+                                echo ""
+                            fi
+                            
+                            # Get assistant response  
+                            full_assistant_response=$(get_full_assistant_response_from_jsonl "$transcript_path" "$parent_msg_id" 2>/dev/null)
+                            if [ -n "$full_assistant_response" ]; then
+                                echo "🤖 Claude Response:"
+                                echo "$full_assistant_response" | head -10 | sed 's/^/   /'
+                                echo ""
+                            fi
+                        fi
+                    fi
+                    
+                    # Show file changes with detailed breakdown
+                    echo "📁 File Changes:"
+                    echo "─────────────────"
+                    display_timeline_changes "$BRANCH" "HEAD"
+                    
+                    echo ""
+                    echo "🔍 Detailed File Diff:"
+                    echo "─────────────────────"
+                    
+                    # Show actual file changes (first few lines)
+                    CHANGED_FILES=$(git diff --name-only HEAD "$BRANCH" 2>/dev/null | head -5)
+                    if [ -n "$CHANGED_FILES" ]; then
+                        while IFS= read -r file; do
+                            if [ -n "$file" ]; then
+                                echo "   📄 $file:"
+                                # Show first 5 lines of changes
+                                DIFF=$(git diff HEAD "$BRANCH" -- "$file" 2>/dev/null | grep '^[+-]' | grep -v '^+++\|^---' | head -5)
+                                if [ -n "$DIFF" ]; then
+                                    echo "$DIFF" | sed 's/^/      /'
+                                else
+                                    echo "      (no visible diff content)"
+                                fi
+                                echo ""
+                            fi
+                        done <<< "$CHANGED_FILES"
+                    fi
+                    
+                    echo ""
+                done
+                
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo "📊 Session Summary"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo "Session: $SELECTED_SESSION"
+                echo "Total Timelines: ${#TIMELINES[@]}"
+                echo "Time Range: $(git log -1 --pretty=format:"%ci" "${TIMELINES[-1]}" 2>/dev/null) to $(git log -1 --pretty=format:"%ci" "${TIMELINES[0]}" 2>/dev/null)"
+                echo ""
+                echo "This view shows the complete conversation flow and resulting code changes."
+                echo "Each timeline represents a point where Claude made changes in response to user requests."
+            } > "$TIMELINE_FILE"
+            
+            # Open in editor using git's configuration hierarchy:
+            # 1. GIT_EDITOR environment variable
+            # 2. core.editor git config
+            # 3. VISUAL environment variable  
+            # 4. EDITOR environment variable
+            # 5. Default fallbacks
+            EDITOR_CMD=""
+            
+            if [ -n "$GIT_EDITOR" ]; then
+                EDITOR_CMD="$GIT_EDITOR"
+            elif [ -n "$(git config --get core.editor 2>/dev/null)" ]; then
+                EDITOR_CMD="$(git config --get core.editor)"
+            elif [ -n "$VISUAL" ]; then
+                EDITOR_CMD="$VISUAL"
+            elif [ -n "$EDITOR" ]; then
+                EDITOR_CMD="$EDITOR"
+            elif command -v nano &> /dev/null; then
+                EDITOR_CMD="nano"
+            elif command -v vim &> /dev/null; then
+                EDITOR_CMD="vim"
+            elif command -v vi &> /dev/null; then
+                EDITOR_CMD="vi"
+            else
+                # Fallback to less for viewing only
+                EDITOR_CMD="less"
+            fi
+            
+            # Open the timeline view
+            $EDITOR_CMD "$TIMELINE_FILE"
+            
+            # Clean up
+            rm -f "$TIMELINE_FILE"
             ;;
         "browse")
             # Browse files in a specific timeline
@@ -1132,47 +1496,8 @@ if [ -n "$file_status" ]; then
     ADDS=${ADDS:-0}
     DELS=${DELS:-0}
     
-    # Build file breakdown like [+5 ~3 -1]
-    file_breakdown="["
-    if [ "$added_files" -gt 0 ]; then
-        file_breakdown="${file_breakdown}+${added_files} "
-    fi
-    if [ "$modified_files" -gt 0 ]; then
-        file_breakdown="${file_breakdown}~${modified_files} "
-    fi
-    if [ "$removed_files" -gt 0 ]; then
-        file_breakdown="${file_breakdown}-${removed_files} "
-    fi
-    file_breakdown="${file_breakdown%% }]"
-    
-    # Create visual indicator
-    VISUAL=""
-    if [ "$ADDS" -gt 0 ]; then
-        if [ "$ADDS" -lt 10 ]; then
-            VISUAL="${VISUAL}$(printf -- '+%.0s' $(seq 1 $ADDS))"
-        elif [ "$ADDS" -lt 50 ]; then
-            VISUAL="${VISUAL}+++"
-        elif [ "$ADDS" -lt 100 ]; then
-            VISUAL="${VISUAL}+++++"
-        else
-            VISUAL="${VISUAL}+++++++"
-        fi
-    fi
-    
-    if [ "$DELS" -gt 0 ]; then
-        if [ "$DELS" -lt 10 ]; then
-            VISUAL="${VISUAL}$(printf -- '-%.0s' $(seq 1 $DELS))"
-        elif [ "$DELS" -lt 50 ]; then
-            VISUAL="${VISUAL}---"
-        elif [ "$DELS" -lt 100 ]; then
-            VISUAL="${VISUAL}-----"
-        else
-            VISUAL="${VISUAL}-------"
-        fi
-    fi
-    
-    # First line: summary
-    TIMELINE_MSG="${file_breakdown}  ${VISUAL}  +${ADDS} -${DELS} lines"
+    # Use shared function to generate summary line
+    TIMELINE_MSG=$(generate_summary_line "$added_files" "$modified_files" "$removed_files" "$ADDS" "$DELS")
     
     # Add individual file lines (sorted by impact then alphabetically)
     # Create temp file for sorting
