@@ -804,8 +804,8 @@ if [ $# -gt 0 ]; then
                 exit 0
             fi
             
-            # Display conversation directly (pipe to less for pagination if needed)
-            {
+            # Generate the conversation view content
+            generate_view_content() {
                 echo "📋 Conversation & Timeline View"
                 echo "Session: $SELECTED_SESSION"
                 echo "==============================================="
@@ -1023,16 +1023,37 @@ if [ $# -gt 0 ]; then
                 echo ""
                 echo "This view shows the complete conversation flow and resulting code changes."
                 echo "Each timeline represents a point where Claude made changes in response to user requests."
-            } | {
-                # Use less for pagination if output is large
-                if [ -t 1 ]; then
-                    # Output is to terminal, use pager for long content
-                    less -R 2>/dev/null || cat
-                else
-                    # Output is redirected, just cat it
-                    cat
-                fi
             }
+            
+            # Create temp file and open in editor
+            TIMELINE_FILE=$(mktemp)
+            generate_view_content > "$TIMELINE_FILE"
+            
+            # Determine which editor to use (respecting git config)
+            EDITOR_CMD=""
+            if [ -n "$GIT_EDITOR" ]; then
+                EDITOR_CMD="$GIT_EDITOR"
+            elif [ -n "$(git config --get core.editor 2>/dev/null)" ]; then
+                EDITOR_CMD="$(git config --get core.editor)"
+            elif [ -n "$VISUAL" ]; then
+                EDITOR_CMD="$VISUAL"
+            elif [ -n "$EDITOR" ]; then
+                EDITOR_CMD="$EDITOR"
+            elif command -v nano &> /dev/null; then
+                EDITOR_CMD="nano"
+            elif command -v vim &> /dev/null; then
+                EDITOR_CMD="vim"
+            elif command -v vi &> /dev/null; then
+                EDITOR_CMD="vi"
+            else
+                EDITOR_CMD="less"
+            fi
+            
+            # Open the timeline view
+            $EDITOR_CMD "$TIMELINE_FILE"
+            
+            # Clean up
+            rm -f "$TIMELINE_FILE"
             ;;
         "browse")
             # Browse files in a specific timeline
