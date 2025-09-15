@@ -1089,26 +1089,12 @@ if [ $# -gt 0 ]; then
             }
             
             # Create temp file and open in editor
-            # Show loading indicator while generating content
             echo "⏳ Generating conversation view..."
-            (
-                chars="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-                while true; do
-                    for (( i=0; i<${#chars}; i++ )); do
-                        echo -en "\r${chars:$i:1} Processing conversation and timelines..."
-                        sleep 0.08
-                    done
-                done
-            ) &
-            loading_pid=$!
             
             TIMELINE_FILE=$(mktemp)
-            generate_view_content > "$TIMELINE_FILE" 2>&1
+            generate_view_content > "$TIMELINE_FILE"
             
-            # Stop loading indicator
-            kill $loading_pid 2>/dev/null
-            wait $loading_pid 2>/dev/null
-            echo -en "\r✅ Ready! Opening in editor...                        \n"
+            echo "✅ Ready! Opening in editor..."
             
             # Determine which editor to use (respecting git config)
             EDITOR_CMD=""
