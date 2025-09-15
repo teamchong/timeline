@@ -123,6 +123,31 @@ get_current_claude_session() {
     return 1
 }
 
+# Get the full path to the current Claude session JSONL file
+get_current_claude_session_file() {
+    local PROJECT_DIR="$HOME/.claude/projects"
+    if [ -d "$PROJECT_DIR" ]; then
+        local CWD=$(pwd)
+        local PROJECT_PATH=""
+        
+        for dir in "$PROJECT_DIR"/*; do
+            if [ -d "$dir" ] && [[ "$(basename "$dir")" == *"timeline"* ]]; then
+                PROJECT_PATH="$dir"
+                break
+            fi
+        done
+        
+        if [ -d "$PROJECT_PATH" ]; then
+            local LATEST_JSONL=$(find "$PROJECT_PATH" -name "*.jsonl" -type f -exec stat -f "%m %N" {} \; 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
+            if [ -f "$LATEST_JSONL" ]; then
+                echo "$LATEST_JSONL"
+                return 0
+            fi
+        fi
+    fi
+    return 1
+}
+
 # Shared function to generate summary line format [+X ~Y -Z] visual +adds -dels lines
 generate_summary_line() {
     local added_files="$1"
@@ -862,7 +887,6 @@ if [ $# -gt 0 ]; then
                                 # Regular user message
                                 MESSAGE_NUM=$((MESSAGE_NUM + 1))
                                 echo ""
-                                echo "> "
                                 
                                 # Extract user message content
                                 content=$(echo "$line" | jq -r '
@@ -875,7 +899,7 @@ if [ $# -gt 0 ]; then
                                     end' 2>/dev/null)
                                 
                                 if [ -n "$content" ]; then
-                                    echo "$content" | sed 's/^/  /'
+                                    echo "> $content"
                                 fi
                                 echo ""
                             fi
@@ -1651,26 +1675,71 @@ git add --all >/dev/null 2>&1
 # Step 4: Write the tree object from our temporary index
 TREE_SHA=$(git write-tree)
 
-# Step 5: Generate detailed file breakdown for commit message
-file_status=$(git diff --name-status HEAD $TREE_SHA 2>/dev/null)
+# Step 5: Try to get conversation context for a meaningful commit message
 TIMELINE_MSG=""
+CONVERSATION_MSG=""
+
+# Try to get the latest user request and assistant action from Claude session
+if command -v jq &> /dev/null; then
+    SESSION_FILE=$(get_current_claude_session_file)
+    if [ -f "$SESSION_FILE" ]; then
+        # Get the most recent user message (non-tool-result)
+        LAST_USER_MSG=$(tail -500 "$SESSION_FILE" | grep '"role":"user"' | grep -v tool_result | tail -1 | jq -r '
+            if .message.content | type == "string" then 
+                .message.content | gsub("\n"; " ") | .[0:100]
+            elif .message.content | type == "array" then
+                .message.content | map(select(.type == "text").text // empty) | join(" ") | .[0:100]
+            else
+                empty
+            end' 2>/dev/null | sed 's/[^a-zA-Z0-9 ._-]//g')
+        
+        # Get the most recent assistant action (tool use)
+        LAST_ASSISTANT_ACTION=$(tail -500 "$SESSION_FILE" | grep '"role":"assistant"' | tail -1 | jq -r '
+            if .message.content | type == "array" then
+                (.message.content[] | select(.type == "tool_use") | .name) // empty
+            else
+                empty
+            end' 2>/dev/null | head -1)
+        
+        # Build conversation-based message
+        if [ -n "$LAST_USER_MSG" ]; then
+            CONVERSATION_MSG="User: ${LAST_USER_MSG}"
+            if [ -n "$LAST_ASSISTANT_ACTION" ]; then
+                CONVERSATION_MSG="${CONVERSATION_MSG} → ${LAST_ASSISTANT_ACTION}"
+            fi
+        fi
+    fi
+fi
+
+# If we have conversation context, use it as primary message
+if [ -n "$CONVERSATION_MSG" ]; then
+    TIMELINE_MSG="$CONVERSATION_MSG"
+else
+    # Fallback to file change summary
+    file_status=$(git diff --name-status HEAD $TREE_SHA 2>/dev/null)
+    
+    if [ -n "$file_status" ]; then
+        # Get file counts for summary line
+        added_files=$(echo "$file_status" | grep '^A' | wc -l | tr -d ' ')
+        modified_files=$(echo "$file_status" | grep '^M' | wc -l | tr -d ' ')
+        removed_files=$(echo "$file_status" | grep '^D' | wc -l | tr -d ' ')
+        
+        # Get line stats
+        STATS=$(git diff --shortstat HEAD $TREE_SHA 2>/dev/null | sed 's/files\? changed/files/' || echo "")
+        ADDS=$(echo "$STATS" | grep -oE '[0-9]+ insertion' | grep -o '[0-9]*' | head -1)
+        DELS=$(echo "$STATS" | grep -oE '[0-9]+ deletion' | grep -o '[0-9]*' | head -1)
+        ADDS=${ADDS:-0}
+        DELS=${DELS:-0}
+        
+        # Use shared function to generate summary line
+        TIMELINE_MSG=$(generate_summary_line "$added_files" "$modified_files" "$removed_files" "$ADDS" "$DELS")
+    fi
+fi
+
+# Add detailed file breakdown below the main message
+file_status=$(git diff --name-status HEAD $TREE_SHA 2>/dev/null)
 
 if [ -n "$file_status" ]; then
-    # Get file counts for summary line
-    added_files=$(echo "$file_status" | grep '^A' | wc -l | tr -d ' ')
-    modified_files=$(echo "$file_status" | grep '^M' | wc -l | tr -d ' ')
-    removed_files=$(echo "$file_status" | grep '^D' | wc -l | tr -d ' ')
-    
-    # Get line stats
-    STATS=$(git diff --shortstat HEAD $TREE_SHA 2>/dev/null | sed 's/files\? changed/files/' || echo "")
-    ADDS=$(echo "$STATS" | grep -oE '[0-9]+ insertion' | grep -o '[0-9]*' | head -1)
-    DELS=$(echo "$STATS" | grep -oE '[0-9]+ deletion' | grep -o '[0-9]*' | head -1)
-    ADDS=${ADDS:-0}
-    DELS=${DELS:-0}
-    
-    # Use shared function to generate summary line
-    TIMELINE_MSG=$(generate_summary_line "$added_files" "$modified_files" "$removed_files" "$ADDS" "$DELS")
-    
     # Add individual file lines (sorted by impact then alphabetically)
     # Create temp file for sorting
     temp_file=$(mktemp)
