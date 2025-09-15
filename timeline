@@ -849,6 +849,19 @@ if [ $# -gt 0 ]; then
                 echo "==============================================="
                 echo "Found ${#TIMELINES[@]} timelines with changes"
                 echo ""
+                
+                # Generate Table of Contents
+                echo "📚 Timeline Summary:"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                for ((i=${#TIMELINES[@]}-1; i>=0; i--)); do
+                    DISPLAY_INDEX=$((${#TIMELINES[@]} - 1 - i))
+                    BRANCH="${TIMELINES[$i]}"
+                    commit_time=$(git log -1 --pretty=format:"%cr" "$BRANCH" 2>/dev/null)  # relative time
+                    commit_msg=$(git log -1 --pretty=format:"%s" "$BRANCH" 2>/dev/null | head -c 60)
+                    printf "  #%-2d %-15s %s\n" "$DISPLAY_INDEX" "($commit_time)" "$commit_msg"
+                done
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo ""
                 echo "💡 TIP: Use './timeline travel <commit-hash>' to restore any timeline"
                 echo ""
                 
