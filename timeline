@@ -784,7 +784,7 @@ if [ $# -gt 0 ]; then
                 fi
             fi
             
-            # Get timelines for selected session
+            # Get timelines for selected session (include all, not just ones with changes)
             TIMELINES=()
             for timeline in "${ALL_TIMELINES[@]}"; do
                 commit_hash=$(git rev-parse "$timeline" 2>/dev/null)
@@ -792,7 +792,7 @@ if [ $# -gt 0 ]; then
                     notes=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null || true)
                     if [ -n "$notes" ]; then
                         session_id=$(echo "$notes" | grep "^Session-Id:" | cut -d' ' -f2- | head -1)
-                        if [ "$session_id" = "$SELECTED_SESSION" ] && [ -n "$(git diff --name-only HEAD "$timeline" 2>/dev/null)" ]; then
+                        if [ "$session_id" = "$SELECTED_SESSION" ]; then
                             TIMELINES+=("$timeline")
                         fi
                     fi
@@ -800,43 +800,142 @@ if [ $# -gt 0 ]; then
             done
             
             if [ ${#TIMELINES[@]} -eq 0 ]; then
-                echo "No timelines with changes found for session '$SELECTED_SESSION'"
+                echo "No timelines found for session '$SELECTED_SESSION'"
                 exit 0
             fi
             
             # Create detailed view content and open in editor
             TIMELINE_FILE=$(mktemp)
             {
-                echo "📋 Full Conversation & Timeline View"
+                echo "📋 Conversation & Timeline View"
                 echo "Session: $SELECTED_SESSION"
                 echo "==============================================="
                 echo "Found ${#TIMELINES[@]} timelines with changes"
                 echo ""
+                echo "💡 TIP: Use './timeline travel <commit-hash>' to restore any timeline"
+                echo ""
                 
-                # Display each timeline with full conversation and commit details
-                for ((i=${#TIMELINES[@]}-1; i>=0; i--)); do
-                    # Calculate display index (0 = oldest, higher = newer)
-                    DISPLAY_INDEX=$((${#TIMELINES[@]} - 1 - i))
-                    BRANCH="${TIMELINES[$i]}"
+                # Read the session JSONL file to get conversation flow
+                SESSION_FILE=""
+                for path in "$HOME/.claude/projects/-Users-steven-chong-Downloads-repos-timeline/${SELECTED_SESSION}.jsonl" \
+                            "$HOME/.claude/projects/"*"/${SELECTED_SESSION}.jsonl"; do
+                    if [ -f "$path" ]; then
+                        SESSION_FILE="$path"
+                        break
+                    fi
+                done
+                
+                if [ -f "$SESSION_FILE" ]; then
+                    # Keep track of timelines (simpler approach without associative arrays)
                     
-                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                    echo "📍 Timeline #$DISPLAY_INDEX"
-                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    # Process conversation and interleave with timelines
+                    MESSAGE_NUM=0
+                    TIMELINE_INDEX=0
                     
-                    # Get commit details
-                    commit_hash=$(git rev-parse "$BRANCH" 2>/dev/null)
-                    commit_time=$(git log -1 --pretty=format:"%ci" "$BRANCH" 2>/dev/null)
-                    commit_msg=$(git log -1 --pretty=format:"%B" "$BRANCH" 2>/dev/null)
+                    while IFS= read -r line; do
+                        # Parse JSON line
+                        role=$(echo "$line" | jq -r '.role // empty' 2>/dev/null)
+                        
+                        if [ "$role" = "user" ]; then
+                            MESSAGE_NUM=$((MESSAGE_NUM + 1))
+                            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                            echo "👤 User Message #$MESSAGE_NUM"
+                            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                            
+                            # Extract user message content
+                            content=$(echo "$line" | jq -r '
+                                if .message.content | type == "string" then 
+                                    .message.content
+                                elif .message.content | type == "array" then
+                                    .message.content[0].text // empty
+                                else
+                                    empty
+                                end' 2>/dev/null)
+                            
+                            if [ -n "$content" ]; then
+                                # Show first 10 lines of user message
+                                echo "$content" | head -10 | sed 's/^/  /'
+                                line_count=$(echo "$content" | wc -l)
+                                if [ "$line_count" -gt 10 ]; then
+                                    echo "  ... ($(($line_count - 10)) more lines)"
+                                fi
+                            fi
+                            echo ""
+                            
+                        elif [ "$role" = "assistant" ]; then
+                            echo "🤖 Claude Response:"
+                            echo "─────────────────────"
+                            
+                            # Extract assistant response (first part)
+                            content=$(echo "$line" | jq -r '
+                                if .message.content | type == "string" then 
+                                    .message.content
+                                elif .message.content | type == "array" then
+                                    .message.content[0].text // empty
+                                else
+                                    empty
+                                end' 2>/dev/null)
+                            
+                            if [ -n "$content" ]; then
+                                # Show first 10 lines of assistant response
+                                echo "$content" | head -10 | sed 's/^/  /'
+                                line_count=$(echo "$content" | wc -l)
+                                if [ "$line_count" -gt 10 ]; then
+                                    echo "  ... ($(($line_count - 10)) more lines)"
+                                fi
+                            fi
+                            
+                            # Check if there's a corresponding timeline for this exchange
+                            if [ $TIMELINE_INDEX -lt ${#TIMELINES[@]} ]; then
+                                BRANCH="${TIMELINES[$TIMELINE_INDEX]}"
+                                commit_hash=$(git rev-parse "$BRANCH" 2>/dev/null)
+                                commit_time=$(git log -1 --pretty=format:"%ci" "$BRANCH" 2>/dev/null)
+                                commit_msg=$(git log -1 --pretty=format:"%s" "$BRANCH" 2>/dev/null)
+                                
+                                echo ""
+                                echo "  📍 Timeline Created: $commit_msg"
+                                echo "  🕒 Time: $commit_time"
+                                echo "  🔗 Restore: ./timeline travel $commit_hash"
+                                
+                                # Show file changes summary
+                                echo "  📁 Changes:"
+                                display_timeline_changes "$BRANCH" "HEAD" | sed 's/^/    /'
+                                
+                                TIMELINE_INDEX=$((TIMELINE_INDEX + 1))
+                            fi
+                            echo ""
+                        fi
+                    done < "$SESSION_FILE"
                     
-                    echo "🕒 Time: $commit_time"
-                    echo "📝 Commit Message:"
-                    echo "$commit_msg" | sed 's/^/   /'
+                else
+                    echo "⚠️  Could not find session file: $SELECTED_SESSION"
                     echo ""
                     
-                    # Get conversation from git notes
-                    notes=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null || true)
-                    
-                    if [ -n "$notes" ]; then
+                    # Fall back to showing timelines without conversation context
+                    for ((i=${#TIMELINES[@]}-1; i>=0; i--)); do
+                        # Calculate display index (0 = oldest, higher = newer)
+                        DISPLAY_INDEX=$((${#TIMELINES[@]} - 1 - i))
+                        BRANCH="${TIMELINES[$i]}"
+                        
+                        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                        echo "📍 Timeline #$DISPLAY_INDEX"
+                        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                        
+                        # Get commit details
+                        commit_hash=$(git rev-parse "$BRANCH" 2>/dev/null)
+                        commit_time=$(git log -1 --pretty=format:"%ci" "$BRANCH" 2>/dev/null)
+                        commit_msg=$(git log -1 --pretty=format:"%B" "$BRANCH" 2>/dev/null)
+                        
+                        echo "🕒 Time: $commit_time"
+                        echo "🔗 Restore: ./timeline travel $commit_hash"
+                        echo "📝 Commit Message:"
+                        echo "$commit_msg" | sed 's/^/   /'
+                        echo ""
+                        
+                        # Get conversation from git notes
+                        notes=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null || true)
+                        
+                        if [ -n "$notes" ]; then
                         # Extract conversation details from notes
                         user_request=$(echo "$notes" | grep "^User-Request-Full:" | cut -d' ' -f2- | head -1)
                         assistant_response=$(echo "$notes" | grep "^Assistant-Response-Full:" | cut -d' ' -f2- | head -1)
@@ -909,7 +1008,8 @@ if [ $# -gt 0 ]; then
                     fi
                     
                     echo ""
-                done
+                    done
+                fi
                 
                 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 echo "📊 Session Summary"
@@ -1222,6 +1322,38 @@ if [ $# -gt 0 ]; then
             exit 0
             ;;
         "travel")
+            # Check if a commit hash was provided as argument
+            if [ $# -eq 2 ] && [ -n "$2" ]; then
+                # Direct travel to specific commit
+                COMMIT_HASH="$2"
+                
+                # Validate it's a valid commit
+                if ! git rev-parse --verify "$COMMIT_HASH" >/dev/null 2>&1; then
+                    echo "❌ Invalid commit hash: $COMMIT_HASH"
+                    exit 1
+                fi
+                
+                echo "🚀 Traveling directly to commit: $COMMIT_HASH"
+                echo ""
+                
+                # Create backup timeline before making changes
+                CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
+                BACKUP_MSG="Backup before travel to $COMMIT_HASH"
+                ./timeline save >/dev/null 2>&1
+                
+                # Restore to the specified commit
+                echo "📍 Restoring working directory to commit $COMMIT_HASH..."
+                git restore --source="$COMMIT_HASH" --worktree . 2>/dev/null || {
+                    # Fallback for older git versions
+                    git checkout "$COMMIT_HASH" -- . 2>/dev/null
+                }
+                
+                echo "✅ Successfully traveled to commit $COMMIT_HASH"
+                echo ""
+                echo "To return to your previous state, use: ./timeline travel"
+                exit 0
+            fi
+            
             # Get current branch name
             CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
             CURRENT_HEAD=$(git rev-parse HEAD 2>/dev/null || exit 0)
@@ -1235,7 +1367,7 @@ if [ $# -gt 0 ]; then
                 
                 echo ""
                 
-                # Always prompt for selection (ignore any arguments)
+                # Always prompt for selection (no arguments provided)
                 read -p "Select timeline number to travel to (0-$((${#TIMELINES[@]} - 1)), or press Enter to exit): " SELECTION
                 
                 # Handle quit - accept empty input
