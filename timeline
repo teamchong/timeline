@@ -837,51 +837,77 @@ if [ $# -gt 0 ]; then
                         role=$(echo "$line" | jq -r '.message.role // empty' 2>/dev/null)
                         
                         if [ "$role" = "user" ]; then
-                            MESSAGE_NUM=$((MESSAGE_NUM + 1))
-                            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                            echo "👤 User Message #$MESSAGE_NUM"
-                            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                            # Check if this is a tool result (these are also marked as user messages)
+                            is_tool_result=$(echo "$line" | jq -r 'if (.message.content | type) == "array" then .message.content[0].type // "" else "" end' 2>/dev/null)
                             
-                            # Extract user message content
-                            content=$(echo "$line" | jq -r '
-                                if .message.content | type == "string" then 
-                                    .message.content
-                                elif .message.content | type == "array" then
-                                    .message.content[0].text // empty
-                                else
-                                    empty
-                                end' 2>/dev/null)
-                            
-                            if [ -n "$content" ]; then
-                                # Show first 10 lines of user message
-                                echo "$content" | head -10 | sed 's/^/  /'
-                                line_count=$(echo "$content" | wc -l)
-                                if [ "$line_count" -gt 10 ]; then
-                                    echo "  ... ($(($line_count - 10)) more lines)"
+                            if [ "$is_tool_result" = "tool_result" ]; then
+                                # This is a tool result, show it inline
+                                result_content=$(echo "$line" | jq -r '.message.content[0].content // "(No content)"' 2>/dev/null | head -10)
+                                echo "  ⎿  $result_content"
+                                echo ""
+                            else
+                                # Regular user message
+                                MESSAGE_NUM=$((MESSAGE_NUM + 1))
+                                echo ""
+                                echo "> "
+                                
+                                # Extract user message content
+                                content=$(echo "$line" | jq -r '
+                                    if .message.content | type == "string" then 
+                                        .message.content
+                                    elif .message.content | type == "array" then
+                                        .message.content | map(select(.type == "text").text // empty) | join("\n")
+                                    else
+                                        empty
+                                    end' 2>/dev/null)
+                                
+                                if [ -n "$content" ]; then
+                                    echo "$content" | sed 's/^/  /'
                                 fi
+                                echo ""
                             fi
-                            echo ""
                             
                         elif [ "$role" = "assistant" ]; then
-                            echo "🤖 Claude Response:"
-                            echo "─────────────────────"
+                            # Extract ALL content blocks (text, tool_use, etc.)
+                            content_array=$(echo "$line" | jq -c '.message.content' 2>/dev/null)
                             
-                            # Extract assistant response (first part)
-                            content=$(echo "$line" | jq -r '
-                                if .message.content | type == "string" then 
-                                    .message.content
-                                elif .message.content | type == "array" then
-                                    .message.content[0].text // empty
+                            if [ "$content_array" != "null" ] && [ -n "$content_array" ]; then
+                                # Check if it's a string or array
+                                if echo "$content_array" | jq -e 'type == "string"' >/dev/null 2>&1; then
+                                    # Single string content
+                                    text=$(echo "$content_array" | jq -r '.')
+                                    echo "⏺ $text"
                                 else
-                                    empty
-                                end' 2>/dev/null)
-                            
-                            if [ -n "$content" ]; then
-                                # Show first 10 lines of assistant response
-                                echo "$content" | head -10 | sed 's/^/  /'
-                                line_count=$(echo "$content" | wc -l)
-                                if [ "$line_count" -gt 10 ]; then
-                                    echo "  ... ($(($line_count - 10)) more lines)"
+                                    # Array of content blocks
+                                    block_count=$(echo "$content_array" | jq 'length')
+                                    for ((i=0; i<$block_count; i++)); do
+                                        block=$(echo "$content_array" | jq -c ".[$i]")
+                                        block_type=$(echo "$block" | jq -r '.type // "text"')
+                                        
+                                        if [ "$block_type" = "text" ]; then
+                                            text=$(echo "$block" | jq -r '.text // empty')
+                                            if [ -n "$text" ]; then
+                                                echo "⏺ $text"
+                                            fi
+                                        elif [ "$block_type" = "tool_use" ]; then
+                                            tool_name=$(echo "$block" | jq -r '.name // "unknown"')
+                                            tool_input=$(echo "$block" | jq -c '.input // {}')
+                                            
+                                            # Format tool calls like Claude Code does
+                                            if [ "$tool_name" = "Bash" ]; then
+                                                cmd=$(echo "$tool_input" | jq -r '.command // ""' | head -c 80)
+                                                echo "⏺ Bash($cmd)"
+                                            elif [ "$tool_name" = "Read" ]; then
+                                                file=$(echo "$tool_input" | jq -r '.file_path // ""' | head -c 80)
+                                                echo "⏺ Read($file)"
+                                            elif [ "$tool_name" = "Edit" ] || [ "$tool_name" = "Write" ]; then
+                                                file=$(echo "$tool_input" | jq -r '.file_path // ""')
+                                                echo "⏺ $tool_name($(basename "$file"))"
+                                            else
+                                                echo "⏺ $tool_name()"
+                                            fi
+                                        fi
+                                    done
                                 fi
                             fi
                             
@@ -899,7 +925,7 @@ if [ $# -gt 0 ]; then
                                 
                                 # Show file changes summary
                                 echo "  📁 Changes:"
-                                display_timeline_changes "$BRANCH" "HEAD" | sed 's/^/    /'
+                                git diff --stat --color=never HEAD "$BRANCH" 2>/dev/null | head -5 | sed 's/^/    /'
                                 
                                 TIMELINE_INDEX=$((TIMELINE_INDEX + 1))
                             fi
