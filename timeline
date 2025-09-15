@@ -634,6 +634,19 @@ if [ $# -gt 0 ]; then
             done
             ;;
         "view")
+            # Check for jq dependency (required for conversation parsing)
+            if ! command -v jq &> /dev/null; then
+                echo "⚠️  The 'view' command requires jq for parsing conversation data"
+                echo ""
+                echo "To install jq:"
+                echo "  macOS:    brew install jq"
+                echo "  Ubuntu:   apt-get install jq"
+                echo "  CentOS:   yum install jq"
+                echo ""
+                echo "Alternatively, use 'timeline travel' to browse timelines without conversation view"
+                exit 1
+            fi
+            
             # Session-based view - select session first, then view timelines
             CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
             CURRENT_HEAD=$(git rev-parse HEAD 2>/dev/null)

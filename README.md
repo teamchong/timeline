@@ -238,9 +238,37 @@ timeline search
 
 ## Requirements
 
-- Git
-- Bash 3.2+ (macOS compatible)
-- No external dependencies
+### Core Dependencies
+- **Git** 2.23+ (for `git restore`, falls back to `git checkout` for older versions)
+- **Bash** 3.2+ (macOS compatible)
+- Standard Unix utilities (included on all Unix-like systems):
+  - `head`, `tail`, `cut`, `grep`, `sed`, `sort`, `wc`
+  - `mktemp` - temporary file creation
+  - `find` - file searching
+
+### Required for Specific Features
+- **jq** - Only needed for `timeline view` command (conversation display)
+  - All other commands work without jq
+  - Install: `brew install jq` (macOS) or `apt install jq` (Linux)
+
+### Optional Dependencies  
+- **less** - for pagination in view command (falls back to `cat`)
+- Text editors for view command (auto-detected in order):
+  - Git-configured editor (`git config core.editor`)
+  - `$VISUAL` or `$EDITOR` environment variables
+  - `nano`, `vim`, `vi` (system defaults)
+
+### Installation Check
+To verify all dependencies are available:
+```bash
+# Check core dependencies
+git --version && echo "✅ Git"
+bash --version && echo "✅ Bash" 
+jq --version && echo "✅ jq"
+
+# Most systems have these built-in
+which mktemp head tail cut grep sed sort wc find && echo "✅ Unix utilities"
+```
 
 ## License
 
