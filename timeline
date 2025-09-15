@@ -19,22 +19,68 @@ display_timeline_changes() {
     local BRANCH="$1"
     local COMPARE_REF="${2:-HEAD}"  # Default to HEAD if not specified
     
-    # Show files that changed with preview
-    echo "   Files that changed (with preview):"
-    CHANGED_FILES=$(git diff --name-only "$COMPARE_REF" "$BRANCH" 2>/dev/null | head -10)
-    if [ -n "$CHANGED_FILES" ]; then
-        while IFS= read -r file; do
-            if [ -n "$file" ]; then
-                echo "      📄 $file"
-                # Show first 3 lines of changes
-                DIFF=$(git diff "$COMPARE_REF" "$BRANCH" -- "$file" 2>/dev/null | grep '^[+-]' | grep -v '^+++\|^---' | head -3)
-                if [ -n "$DIFF" ]; then
-                    echo "$DIFF" | while IFS= read -r line; do
-                        echo "         $line"
-                    done
-                fi
+    # Show file breakdown with status indicators
+    file_status=$(git diff --name-status "$COMPARE_REF" "$BRANCH" 2>/dev/null)
+    if [ -n "$file_status" ]; then
+        # Get file counts
+        added_files=0
+        modified_files=0
+        removed_files=0
+        
+        added_files=$(echo "$file_status" | grep '^A' | wc -l | tr -d ' ')
+        modified_files=$(echo "$file_status" | grep '^M' | wc -l | tr -d ' ')
+        removed_files=$(echo "$file_status" | grep '^D' | wc -l | tr -d ' ')
+        
+        # Get line stats
+        STATS=$(git diff --shortstat "$COMPARE_REF" "$BRANCH" 2>/dev/null | sed 's/files\? changed/files/' || echo "")
+        ADDS=$(echo "$STATS" | grep -oE '[0-9]+ insertion' | grep -o '[0-9]*' | head -1)
+        DELS=$(echo "$STATS" | grep -oE '[0-9]+ deletion' | grep -o '[0-9]*' | head -1)
+        ADDS=${ADDS:-0}
+        DELS=${DELS:-0}
+        
+        # Build file breakdown like [+5 ~3 -1]
+        file_breakdown="["
+        if [ "$added_files" -gt 0 ]; then
+            file_breakdown="${file_breakdown}+${added_files} "
+        fi
+        if [ "$modified_files" -gt 0 ]; then
+            file_breakdown="${file_breakdown}~${modified_files} "
+        fi
+        if [ "$removed_files" -gt 0 ]; then
+            file_breakdown="${file_breakdown}-${removed_files} "
+        fi
+        file_breakdown="${file_breakdown%% }]"
+        
+        # Create visual indicator
+        VISUAL=""
+        if [ "$ADDS" -gt 0 ]; then
+            if [ "$ADDS" -lt 10 ]; then
+                VISUAL="${VISUAL}$(printf -- '+%.0s' $(seq 1 $ADDS))"
+            elif [ "$ADDS" -lt 50 ]; then
+                VISUAL="${VISUAL}+++"
+            elif [ "$ADDS" -lt 100 ]; then
+                VISUAL="${VISUAL}+++++"
+            else
+                VISUAL="${VISUAL}+++++++"
             fi
-        done <<< "$CHANGED_FILES"
+        fi
+        
+        if [ "$DELS" -gt 0 ]; then
+            if [ "$DELS" -lt 10 ]; then
+                VISUAL="${VISUAL}$(printf -- '-%.0s' $(seq 1 $DELS))"
+            elif [ "$DELS" -lt 50 ]; then
+                VISUAL="${VISUAL}---"
+            elif [ "$DELS" -lt 100 ]; then
+                VISUAL="${VISUAL}-----"
+            else
+                VISUAL="${VISUAL}-------"
+            fi
+        fi
+        
+        # Show file breakdown, visual indicator, and line counts
+        printf "   %s  %s  +%d -%d lines\n" "$file_breakdown" "$VISUAL" "$ADDS" "$DELS"
+    else
+        printf "   (no changes)\n"
     fi
 }
 
@@ -79,17 +125,37 @@ display_timeline() {
         # Format line
         printf "  %2d: %s\n" "$DISPLAY_INDEX" "$timeline_info"
         
-        # Show visual diff on next line if there are changes
-        if [ -n "$STATS" ]; then
-            # Parse stats (handle both singular and plural forms)
-            FILES=$(echo "$STATS" | grep -oE '[0-9]+ file' | grep -o '[0-9]*' | head -1)
+        # Show file breakdown with status indicators
+        file_status=$(git diff --name-status HEAD "$BRANCH" 2>/dev/null)
+        if [ -n "$file_status" ]; then
+            # Get file counts
+            added_files=0
+            modified_files=0
+            removed_files=0
+            
+            added_files=$(echo "$file_status" | grep '^A' | wc -l | tr -d ' ')
+            modified_files=$(echo "$file_status" | grep '^M' | wc -l | tr -d ' ')
+            removed_files=$(echo "$file_status" | grep '^D' | wc -l | tr -d ' ')
+            
+            # Get line stats
+            STATS=$(git diff --shortstat HEAD "$BRANCH" 2>/dev/null | sed 's/files\? changed/files/' || echo "")
             ADDS=$(echo "$STATS" | grep -oE '[0-9]+ insertion' | grep -o '[0-9]*' | head -1)
             DELS=$(echo "$STATS" | grep -oE '[0-9]+ deletion' | grep -o '[0-9]*' | head -1)
-            
-            # Default to 0 if empty
-            FILES=${FILES:-0}
             ADDS=${ADDS:-0}
             DELS=${DELS:-0}
+            
+            # Build file breakdown like [+5 ~3 -1]
+            file_breakdown="["
+            if [ "$added_files" -gt 0 ]; then
+                file_breakdown="${file_breakdown}+${added_files} "
+            fi
+            if [ "$modified_files" -gt 0 ]; then
+                file_breakdown="${file_breakdown}~${modified_files} "
+            fi
+            if [ "$removed_files" -gt 0 ]; then
+                file_breakdown="${file_breakdown}-${removed_files} "
+            fi
+            file_breakdown="${file_breakdown%% }]"
             
             # Create visual indicator
             VISUAL=""
@@ -117,8 +183,8 @@ display_timeline() {
                 fi
             fi
             
-            # Show visual indicator and formatted stats (GitHub-style)
-            printf "      %s  %d files, +%d lines, -%d lines\n" "$VISUAL" "$FILES" "$ADDS" "$DELS"
+            # Show file breakdown, visual indicator, and line counts
+            printf "      %s  %s  +%d -%d lines\n" "$file_breakdown" "$VISUAL" "$ADDS" "$DELS"
         else
             printf "      (no changes)\n"
         fi
@@ -1049,11 +1115,128 @@ git add --all >/dev/null 2>&1
 # Step 4: Write the tree object from our temporary index
 TREE_SHA=$(git write-tree)
 
-# Step 5: Count changed files for commit message
-FILE_COUNT=$(git diff-index --name-only HEAD | wc -l | tr -d ' ')
+# Step 5: Generate detailed file breakdown for commit message
+file_status=$(git diff --name-status HEAD $TREE_SHA 2>/dev/null)
+TIMELINE_MSG=""
+
+if [ -n "$file_status" ]; then
+    # Get file counts for summary line
+    added_files=$(echo "$file_status" | grep '^A' | wc -l | tr -d ' ')
+    modified_files=$(echo "$file_status" | grep '^M' | wc -l | tr -d ' ')
+    removed_files=$(echo "$file_status" | grep '^D' | wc -l | tr -d ' ')
+    
+    # Get line stats
+    STATS=$(git diff --shortstat HEAD $TREE_SHA 2>/dev/null | sed 's/files\? changed/files/' || echo "")
+    ADDS=$(echo "$STATS" | grep -oE '[0-9]+ insertion' | grep -o '[0-9]*' | head -1)
+    DELS=$(echo "$STATS" | grep -oE '[0-9]+ deletion' | grep -o '[0-9]*' | head -1)
+    ADDS=${ADDS:-0}
+    DELS=${DELS:-0}
+    
+    # Build file breakdown like [+5 ~3 -1]
+    file_breakdown="["
+    if [ "$added_files" -gt 0 ]; then
+        file_breakdown="${file_breakdown}+${added_files} "
+    fi
+    if [ "$modified_files" -gt 0 ]; then
+        file_breakdown="${file_breakdown}~${modified_files} "
+    fi
+    if [ "$removed_files" -gt 0 ]; then
+        file_breakdown="${file_breakdown}-${removed_files} "
+    fi
+    file_breakdown="${file_breakdown%% }]"
+    
+    # Create visual indicator
+    VISUAL=""
+    if [ "$ADDS" -gt 0 ]; then
+        if [ "$ADDS" -lt 10 ]; then
+            VISUAL="${VISUAL}$(printf -- '+%.0s' $(seq 1 $ADDS))"
+        elif [ "$ADDS" -lt 50 ]; then
+            VISUAL="${VISUAL}+++"
+        elif [ "$ADDS" -lt 100 ]; then
+            VISUAL="${VISUAL}+++++"
+        else
+            VISUAL="${VISUAL}+++++++"
+        fi
+    fi
+    
+    if [ "$DELS" -gt 0 ]; then
+        if [ "$DELS" -lt 10 ]; then
+            VISUAL="${VISUAL}$(printf -- '-%.0s' $(seq 1 $DELS))"
+        elif [ "$DELS" -lt 50 ]; then
+            VISUAL="${VISUAL}---"
+        elif [ "$DELS" -lt 100 ]; then
+            VISUAL="${VISUAL}-----"
+        else
+            VISUAL="${VISUAL}-------"
+        fi
+    fi
+    
+    # First line: summary
+    TIMELINE_MSG="${file_breakdown}  ${VISUAL}  +${ADDS} -${DELS} lines"
+    
+    # Add individual file lines (sorted by impact then alphabetically)
+    # Create temp file for sorting
+    temp_file=$(mktemp)
+    
+    while IFS= read -r line; do
+        if [ -n "$line" ]; then
+            status=$(echo "$line" | cut -f1)
+            filename=$(echo "$line" | cut -f2-)
+            
+            # Get line changes for this file
+            file_stats=$(git diff --stat HEAD $TREE_SHA -- "$filename" 2>/dev/null | tail -1)
+            file_adds=$(echo "$file_stats" | grep -oE '[0-9]+ \+' | grep -o '[0-9]*' || echo "0")
+            file_dels=$(echo "$file_stats" | grep -oE '[0-9]+ -' | grep -o '[0-9]*' || echo "0")
+            file_adds=${file_adds:-0}
+            file_dels=${file_dels:-0}
+            
+            # Create visual for this file
+            file_visual=""
+            if [ "$file_adds" -gt 0 ]; then
+                if [ "$file_adds" -lt 10 ]; then
+                    file_visual="${file_visual}$(printf -- '+%.0s' $(seq 1 $file_adds))"
+                else
+                    file_visual="${file_visual}+++"
+                fi
+            fi
+            if [ "$file_dels" -gt 0 ]; then
+                if [ "$file_dels" -lt 10 ]; then
+                    file_visual="${file_visual}$(printf -- '-%.0s' $(seq 1 $file_dels))"
+                else
+                    file_visual="${file_visual}---"
+                fi
+            fi
+            
+            # Convert status to symbol
+            case "$status" in
+                A) symbol="+" ;;
+                M) symbol="~" ;;
+                D) symbol="-" ;;
+                *) symbol="?" ;;
+            esac
+            
+            # Calculate impact for sorting (total lines changed)
+            impact=$((file_adds + file_dels))
+            
+            # Store for sorting: impact:filename:symbol:visual:adds:dels
+            printf "%05d:%s:%s:%s:%s:%s\n" "$impact" "$filename" "$symbol" "$file_visual" "$file_adds" "$file_dels" >> "$temp_file"
+        fi
+    done <<< "$file_status"
+    
+    # Sort by impact (descending) then filename (ascending) and build message
+    if [ -f "$temp_file" ]; then
+        # Read sorted file into TIMELINE_MSG
+        while IFS=: read -r impact filename symbol file_visual file_adds file_dels; do
+            TIMELINE_MSG="${TIMELINE_MSG}
+${symbol}${filename} ${file_visual} +${file_adds} -${file_dels} lines"
+        done < <(sort -rn -t: -k1,1 -k2,2 "$temp_file")
+        rm -f "$temp_file"
+    fi
+else
+    TIMELINE_MSG="No changes"
+fi
 
 # Step 6: Create the commit object (without updating any refs yet)
-TIMELINE_MSG="+$TIMELINE_NUM $COMMIT_MSG @$SHORT_HEAD - $FILE_COUNT files"
 TIMELINE_COMMIT=$(echo "$TIMELINE_MSG" | git commit-tree $TREE_SHA -p $CURRENT_HEAD)
 
 # Step 7: Create a branch reference for this timeline
