@@ -766,19 +766,25 @@ if [ $# -gt 0 ]; then
                 echo "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/'"'"'/\\'"'"'/g; s/\n/\\n/g; s/\r/\\r/g; s/\t/\\t/g'
             }
             
-            # Generate session data as JavaScript objects
+            # Generate session data as JavaScript objects in parallel
             echo "const timelineData = {" > /tmp/timeline-data.js
             echo "  sessions: [" >> /tmp/timeline-data.js
             
-            # Process each session to generate data
-            for session_idx in "${!SESSION_LIST[@]}"; do
-                session_id="${SESSION_LIST[$session_idx]}"
+            # Create temp directory for parallel processing
+            TEMP_DIR=$(mktemp -d)
+            trap "rm -rf $TEMP_DIR" EXIT
+            
+            # Function to process a single session (for parallel execution)
+            process_session() {
+                local session_idx=$1
+                local session_id=$2
+                local output_file=$3
                 
-                # Show progress
-                show_progress $((session_idx + 1)) ${#SESSION_LIST[@]}
+                # Redirect all output to the file
+                exec > "$output_file"
                 
                 # Get session info
-                session_file=""
+                local session_file=""
                 for path in "$HOME/.claude/projects/-Users-steven-chong-Downloads-repos-timeline/${session_id}.jsonl" \
                             "$HOME/.claude/projects/"*"/${session_id}.jsonl"; do
                     if [ -f "$path" ]; then
@@ -788,8 +794,8 @@ if [ $# -gt 0 ]; then
                 done
                 
                 # Get session timestamps
-                session_create_datetime="Unknown"
-                session_modified_datetime="Unknown"
+                local session_create_datetime="Unknown"
+                local session_modified_datetime="Unknown"
                 
                 if [ -f "$session_file" ]; then
                     first_timestamp=$(grep -m 1 '"timestamp"' "$session_file" 2>/dev/null | jq -r '.timestamp // empty' 2>/dev/null | head -1)
@@ -804,16 +810,19 @@ if [ $# -gt 0 ]; then
                 fi
                 
                 # Start session object
-                echo "    {" >> /tmp/timeline-data.js
-                echo "      id: \"$(escape_js "$session_id")\"," >> /tmp/timeline-data.js
-                echo "      index: $session_idx," >> /tmp/timeline-data.js
-                echo "      created: \"$(escape_js "$session_create_datetime")\"," >> /tmp/timeline-data.js
-                echo "      modified: \"$(escape_js "$session_modified_datetime")\"," >> /tmp/timeline-data.js
-                echo "      timelines: [" >> /tmp/timeline-data.js
+                echo "    {"
+                echo "      id: \"$(escape_js "$session_id")\","
+                echo "      index: $session_idx,"
+                echo "      created: \"$(escape_js "$session_create_datetime")\","
+                echo "      modified: \"$(escape_js "$session_modified_datetime")\","
+                echo "      timelines: ["
                 
                 # Get timelines for this session
-                SESSION_TIMELINES=()
-                for timeline in "${ALL_TIMELINES[@]}"; do
+                local SESSION_TIMELINES=()
+                # Get all timelines from git directly in this subshell
+                local CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
+                local ALL_TIMELINES_LOCAL=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/*" 2>/dev/null))
+                for timeline in "${ALL_TIMELINES_LOCAL[@]}"; do
                     commit_hash=$(git rev-parse "$timeline" 2>/dev/null)
                     if [ -n "$commit_hash" ]; then
                         notes=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null || true)
@@ -868,25 +877,59 @@ if [ $# -gt 0 ]; then
                     echo "          date: \"$(escape_js "$commit_date")\"," >> /tmp/timeline-data.js
                     echo "          message: \"$(escape_js "$commit_msg")\"," >> /tmp/timeline-data.js
                     echo "          displayIndex: $DISPLAY_INDEX," >> /tmp/timeline-data.js
-                    echo "          stats: {" >> /tmp/timeline-data.js
-                    echo "            filesChanged: ${files_changed:-0}," >> /tmp/timeline-data.js
-                    echo "            additions: ${additions:-0}," >> /tmp/timeline-data.js
-                    echo "            deletions: ${deletions:-0}" >> /tmp/timeline-data.js
-                    echo "          }," >> /tmp/timeline-data.js
-                    echo "          files: $changed_files_json" >> /tmp/timeline-data.js
+                    echo "          stats: {"
+                    echo "            filesChanged: ${files_changed:-0},"
+                    echo "            additions: ${additions:-0},"
+                    echo "            deletions: ${deletions:-0}"
+                    echo "          },"
+                    echo "          files: $changed_files_json"
                     if [ $i -eq 0 ]; then
-                        echo "        }" >> /tmp/timeline-data.js
+                        echo "        }"
                     else
-                        echo "        }," >> /tmp/timeline-data.js
+                        echo "        },"
                     fi
                 done
                 
-                echo "      ]" >> /tmp/timeline-data.js
+                echo "      ]"
+                echo "    }"
+            }
+            
+            # Export the function and escape_js for subshells
+            export -f process_session
+            export -f escape_js
+            
+            # Process sessions in parallel
+            echo "Processing ${#SESSION_LIST[@]} sessions in parallel..."
+            echo ""
+            
+            # Start all parallel jobs
+            for session_idx in "${!SESSION_LIST[@]}"; do
+                session_id="${SESSION_LIST[$session_idx]}"
+                output_file="$TEMP_DIR/session_${session_idx}.json"
                 
-                if [ $session_idx -eq $((${#SESSION_LIST[@]} - 1)) ]; then
-                    echo "    }" >> /tmp/timeline-data.js
-                else
-                    echo "    }," >> /tmp/timeline-data.js
+                # Run session processing in background
+                process_session "$session_idx" "$session_id" "$output_file" &
+                
+                # Limit parallel jobs to avoid overwhelming the system (max 8)
+                while [ $(jobs -r | wc -l) -ge 8 ]; do
+                    sleep 0.1
+                done
+            done
+            
+            # Wait for all background jobs to complete with progress
+            echo -n "Waiting for parallel processing to complete..."
+            wait
+            echo " Done!"
+            
+            # Combine results in order
+            for session_idx in "${!SESSION_LIST[@]}"; do
+                output_file="$TEMP_DIR/session_${session_idx}.json"
+                if [ -f "$output_file" ]; then
+                    cat "$output_file" >> /tmp/timeline-data.js
+                    # Add comma if not last session
+                    if [ $session_idx -lt $((${#SESSION_LIST[@]} - 1)) ]; then
+                        echo "," >> /tmp/timeline-data.js
+                    fi
                 fi
             done
             
