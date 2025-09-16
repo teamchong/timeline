@@ -1,0 +1,41 @@
+{
+  "name": "timeline",
+  "version": "2.0.0",
+  "description": "Fast git-based snapshot tool powered by Bun",
+  "module": "src/cli.ts",
+  "type": "module",
+  "bin": {
+    "timeline": "./bin/timeline"
+  },
+  "files": [
+    "bin/",
+    "timeline",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build:cli": "mkdir -p bin && bun build src/cli.ts src/timeline-core.ts src/view.ts --compile --outfile bin/timeline",
+    "build:macos": "bun run build:cli",
+    "build:linux": "mkdir -p bin && bun build src/cli.ts --compile --target=bun-linux-x64 --outfile bin/timeline-linux",
+    "build:windows": "mkdir -p bin && bun build src/cli.ts --compile --target=bun-windows-x64 --outfile bin/timeline.exe",
+    "build": "bun run build:cli",
+    "dev": "bun run src/cli.ts",
+    "view": "bun run src/cli.ts view",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write \"**/*.{ts,js,json,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,js,json,md}\"",
+    "clean": "rm -rf bin/ node_modules/ bun.lockb"
+  },
+  "devDependencies": {
+    "@types/marked": "^6.0.0",
+    "bun-types": "latest",
+    "prettier": "^3.6.2"
+  },
+  "dependencies": {
+    "marked": "^16.3.0"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  }
+}

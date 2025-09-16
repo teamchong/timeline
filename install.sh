@@ -1,158 +1,143 @@
 #!/bin/bash
 
-# Timeline Installation Script
+# Timeline Git Snapshot Tool Installer
+# Builds and installs the timeline binary
 
 set -e
 
+# Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TIMELINE_SCRIPT="$SCRIPT_DIR/timeline"
 
-echo "📦 Timeline Installation"
-echo ""
-
-# Check if timeline script exists
-if [ ! -f "$TIMELINE_SCRIPT" ]; then
-    echo "❌ Error: timeline script not found at $TIMELINE_SCRIPT"
-    exit 1
+# Determine installation directory
+if [ "${TIMELINE_SYSTEM_INSTALL:-}" = "true" ]; then
+    INSTALL_DIR="/usr/local/bin"
+elif [ "${TIMELINE_SYSTEM_INSTALL:-}" = "false" ]; then
+    INSTALL_DIR="$HOME/.local/bin"
+else
+    # Auto-detect best installation path
+    USER_DIR="$HOME/.local/bin"
+    SYSTEM_DIR="/usr/local/bin"
+    
+    # Check if user dir is in PATH
+    if [[ ":$PATH:" == *":$USER_DIR:"* ]]; then
+        echo "✅ Found $USER_DIR in PATH - will install there (no sudo needed)"
+        INSTALL_DIR="$USER_DIR"
+    else
+        echo "⚠️  $USER_DIR is not in your PATH"
+        echo ""
+        echo "Choose installation location:"
+        echo "1) $SYSTEM_DIR (requires sudo, but works immediately)"
+        echo "2) $USER_DIR (no sudo, but you'll need to add to PATH)"
+        echo ""
+        read -p "Enter choice (1 or 2): " choice
+        
+        case $choice in
+            1)
+                INSTALL_DIR="$SYSTEM_DIR"
+                TIMELINE_SYSTEM_INSTALL=true
+                echo "→ Installing to $SYSTEM_DIR (will require sudo)"
+                ;;
+            2)
+                INSTALL_DIR="$USER_DIR"
+                TIMELINE_SYSTEM_INSTALL=false
+                echo "→ Installing to $USER_DIR (no sudo needed)"
+                ;;
+            *)
+                echo "Invalid choice, defaulting to user directory"
+                INSTALL_DIR="$USER_DIR"
+                TIMELINE_SYSTEM_INSTALL=false
+                ;;
+        esac
+    fi
 fi
 
-# Make timeline executable
-chmod +x "$TIMELINE_SCRIPT"
-
-echo "Choose installation method for the 'timeline' command:"
-echo "  1) Symlink to /usr/local/bin (recommended - auto-updates)"
-echo "  2) Copy to /usr/local/bin (standalone)"
-echo "  3) Add directory to PATH (manual setup)"
-echo "  4) Skip PATH setup (Claude Code auto-save will still work)"
 echo ""
-read -p "Select option (1-4, or press Enter for option 1): " INSTALL_METHOD
-
-if [ -z "$INSTALL_METHOD" ]; then
-    INSTALL_METHOD="1"
-fi
-
-case "$INSTALL_METHOD" in
-    "1")
-        # Create symlink
-        echo "Creating symlink..."
-        if [ -L /usr/local/bin/timeline ]; then
-            echo "Removing existing symlink..."
-            sudo rm /usr/local/bin/timeline
-        elif [ -f /usr/local/bin/timeline ]; then
-            echo "⚠️  Warning: /usr/local/bin/timeline exists and is not a symlink"
-            read -p "Overwrite? (y/N): " -n 1 -r
-            echo ""
-            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                echo "Cancelled."
-                exit 1
-            fi
-            sudo rm /usr/local/bin/timeline
-        fi
-        
-        sudo ln -s "$TIMELINE_SCRIPT" /usr/local/bin/timeline
-        echo "✅ Symlink created at /usr/local/bin/timeline"
-        echo "   Pointing to: $TIMELINE_SCRIPT"
-        ;;
-        
-    "2")
-        # Copy file
-        echo "Copying timeline to /usr/local/bin..."
-        sudo cp "$TIMELINE_SCRIPT" /usr/local/bin/timeline
-        sudo chmod +x /usr/local/bin/timeline
-        echo "✅ Timeline copied to /usr/local/bin/timeline"
-        echo "   Note: Updates won't be automatic (need to reinstall)"
-        ;;
-        
-    "3")
-        # Add to PATH
-        echo ""
-        echo "To add timeline to your PATH, add this line to your shell config:"
-        echo ""
-        
-        # Detect shell
-        if [ -n "$ZSH_VERSION" ]; then
-            SHELL_CONFIG="~/.zshrc"
-        elif [ -n "$BASH_VERSION" ]; then
-            SHELL_CONFIG="~/.bashrc or ~/.bash_profile"
-        else
-            SHELL_CONFIG="your shell configuration file"
-        fi
-        
-        echo "  export PATH=\"\$PATH:$SCRIPT_DIR\""
-        echo ""
-        echo "Add to: $SHELL_CONFIG"
-        echo ""
-        echo "Then reload your shell or run:"
-        echo "  source $SHELL_CONFIG"
-        ;;
-        
-    "4")
-        echo "Skipping PATH setup..."
-        echo "Timeline will only be available through Claude Code hooks"
-        ;;
-        
-    *)
-        echo "Invalid option"
-        exit 1
-        ;;
-esac
-
-# Install Claude Code integration (main purpose of this tool)
+echo "🚀 Timeline Installer"
+echo "===================="
+echo "Installing to: $INSTALL_DIR"
 echo ""
-echo "Installing Claude Code hook for automatic snapshots..."
 
-# Check if Claude settings exist first
-CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-SETTINGS_FILE="$CLAUDE_DIR/settings.json"
-
-if [ ! -f "$SETTINGS_FILE" ]; then
-    echo "❌ Claude Code settings file not found at: $SETTINGS_FILE"
-    echo "Please make sure Claude Code is installed and configured."
+# Build binaries first
+echo "🔨 Building binaries..."
+if command -v bun &> /dev/null; then
+    cd "$SCRIPT_DIR"
+    
+    # Check if dependencies are installed
+    if [ ! -d "node_modules" ]; then
+        echo "📦 Installing dependencies..."
+        bun install
+        echo "✅ Dependencies installed"
+    fi
+    
+    # Build the binaries
+    bun run build
+    echo "✅ Binaries built successfully"
+else
+    echo "❌ Error: Bun is not installed"
     echo ""
-    echo "Note: The timeline command has been installed and will work manually."
+    echo "Please install Bun first:"
+    echo "  curl -fsSL https://bun.sh/install | bash"
+    echo ""
+    echo "After installation, restart your terminal and run this script again."
     exit 1
 fi
 
-# Use timeline command to install hooks
-if [ "$INSTALL_METHOD" = "1" ] || [ "$INSTALL_METHOD" = "2" ]; then
-    # Timeline should be in PATH now, use it directly
-    if command -v timeline &> /dev/null; then
-        timeline install
-    else
-        echo "⚠️  Timeline not found in PATH yet. You may need to restart your terminal."
-        echo "   Then run: timeline install"
-    fi
-elif [ "$INSTALL_METHOD" = "3" ]; then
-    echo "⚠️  Timeline not in PATH yet. After adding to PATH and reloading shell, run:"
-    echo "   timeline install"
-else
-    # Method 4: Not in PATH, use full path
-    "$TIMELINE_SCRIPT" install
+# Check if binary was built successfully
+if [ ! -f "$SCRIPT_DIR/bin/timeline" ]; then
+    echo "❌ Build failed - binary not found in $SCRIPT_DIR/bin/"
+    echo "Expected: timeline"
+    exit 1
 fi
 
-# Test installation
-echo ""
-echo "🧪 Testing installation..."
+# Create directories
+echo "📁 Creating directories..."
+mkdir -p "$INSTALL_DIR"
 
-if [ "$INSTALL_METHOD" != "3" ] && [ "$INSTALL_METHOD" != "4" ]; then
-    if command -v timeline &> /dev/null; then
-        echo "✅ Timeline is available in PATH"
-        echo "   Version: $(timeline 2>&1 | head -1 | grep -o 'Usage:' || echo 'Installed')"
-    else
-        echo "⚠️  Timeline not found in PATH"
-        echo "   You may need to restart your terminal"
+# Install binary
+echo "📦 Installing timeline binary..."
+
+# Use sudo if installing to system directory
+if [ "$TIMELINE_SYSTEM_INSTALL" = "true" ]; then
+    if ! sudo cp "$SCRIPT_DIR/bin/timeline" "$INSTALL_DIR/timeline"; then
+        echo "❌ Failed to install binary (sudo required for $INSTALL_DIR)"
+        exit 1
     fi
+    sudo chmod +x "$INSTALL_DIR/timeline"
 else
-    echo "✅ Timeline installed at: $TIMELINE_SCRIPT"
+    if ! cp "$SCRIPT_DIR/bin/timeline" "$INSTALL_DIR/timeline"; then
+        echo "❌ Failed to install binary to $INSTALL_DIR"
+        exit 1
+    fi
+    chmod +x "$INSTALL_DIR/timeline"
+fi
+
+# Timeline is now fully implemented in Bun - no bash script needed
+
+# Install Claude Code hooks
+echo "🔧 Installing Claude Code hooks..."
+if ! "$INSTALL_DIR/timeline" install; then
+    echo "⚠️  Hook installation failed, but binary is installed"
+    echo "You can try installing hooks manually with: timeline install"
 fi
 
 echo ""
-echo "🎉 Installation complete!"
+echo "✅ Timeline installed successfully!"
 echo ""
-echo "Quick start:"
-echo "  timeline         - Show help"
-echo "  timeline save    - Create a snapshot"
-echo "  timeline travel  - Browse snapshots"
-echo "  timeline view    - View timeline contents"
+echo "📍 Binary installed at: $INSTALL_DIR/timeline"
 echo ""
-echo "Repository: $SCRIPT_DIR"
+
+# Check PATH
+if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]] && [ "$INSTALL_DIR" != "/usr/local/bin" ]; then
+    echo "⚠️  $INSTALL_DIR is not in your PATH"
+    echo ""
+    echo "Add this to your shell config (~/.bashrc, ~/.zshrc, etc.):"
+    echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
+    echo ""
+    echo "Or run this now:"
+    echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
+    echo ""
+fi
+
+echo "🎉 Ready to use! Try:"
+echo "  timeline --help"
+echo "  timeline view"

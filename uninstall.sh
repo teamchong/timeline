@@ -1,49 +1,55 @@
 #!/bin/bash
 
-# Timeline Uninstallation Script
-
 set -e
 
-echo "🗑️  Timeline Uninstallation"
-echo ""
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
 
-# Remove from PATH
-if [ -L /usr/local/bin/timeline ]; then
-    echo "Removing symlink from /usr/local/bin..."
-    sudo rm /usr/local/bin/timeline
-    echo "✅ Symlink removed"
-elif [ -f /usr/local/bin/timeline ]; then
-    echo "Removing timeline from /usr/local/bin..."
-    sudo rm /usr/local/bin/timeline
-    echo "✅ Timeline removed from /usr/local/bin"
-else
-    echo "ℹ️  Timeline not found in /usr/local/bin"
+# Configuration
+INSTALL_DIR="$HOME/.local/timeline"
+BIN_DIR="$HOME/.local/bin"
+TIMELINE_BIN="$BIN_DIR/timeline"
+
+echo -e "${BLUE}Timeline Uninstaller${NC}"
+echo "===================="
+echo
+
+# Remove Claude Code hooks first
+if [ -x "$TIMELINE_BIN" ]; then
+    echo -e "${BLUE}Removing Claude Code hooks...${NC}"
+    "$TIMELINE_BIN" uninstall 2>/dev/null || true
+elif [ -x "./timeline" ]; then
+    echo -e "${BLUE}Removing Claude Code hooks...${NC}"
+    ./timeline uninstall 2>/dev/null || true
 fi
 
-# Remove Claude Code integration
-echo ""
-echo "Removing Claude Code integration..."
+# Remove binary
+if [ -f "$TIMELINE_BIN" ]; then
+    echo -e "${BLUE}Removing timeline binary...${NC}"
+    rm -f "$TIMELINE_BIN"
+fi
 
-# Check if Claude settings exist
-CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-SETTINGS_FILE="$CLAUDE_DIR/settings.json"
+# Remove installation directory
+if [ -d "$INSTALL_DIR" ]; then
+    echo -e "${BLUE}Removing installation directory...${NC}"
+    rm -rf "$INSTALL_DIR"
+fi
 
-if [ ! -f "$SETTINGS_FILE" ]; then
-    echo "ℹ️  Claude Code settings file not found at: $SETTINGS_FILE"
-    echo "   No hooks to remove."
-else
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    TIMELINE_SCRIPT="$SCRIPT_DIR/timeline"
-    
-    if [ -f "$TIMELINE_SCRIPT" ]; then
-        "$TIMELINE_SCRIPT" uninstall
-    else
-        echo "⚠️  Could not remove Claude Code hooks (timeline script not found)"
+# Clean up PATH in shell configs
+echo -e "${BLUE}Cleaning up shell configuration...${NC}"
+for config in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+    if [ -f "$config" ]; then
+        # Remove timeline PATH entries
+        grep -v "# Timeline" "$config" | grep -v "$BIN_DIR" > "$config.tmp" || true
+        mv "$config.tmp" "$config"
     fi
-fi
+done
 
-echo ""
-echo "✅ Uninstallation complete!"
-echo ""
-echo "Note: The timeline repository at $(dirname "$0") was not deleted."
-echo "You can safely delete it if you no longer need it."
+echo
+echo -e "${GREEN}✅ Timeline uninstalled successfully!${NC}"
+echo
+echo -e "${YELLOW}Note: You may need to reload your shell for PATH changes to take effect.${NC}"

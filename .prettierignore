@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build output
+bin/
+dist/
+build/
+
+# Bun
+bun.lockb
+
+# Coverage
+coverage/
+*.lcov
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# Generated files
+*.min.js
+*.min.css
+
+# Bash scripts
+timeline
+install.sh
+uninstall.sh

@@ -1,11 +1,52 @@
-# macOS
-.DS_Store
+# Dependencies
+node_modules/
+*.log
 
-# Temporary files
+# Build output
+bin/
+dist/
+build/
+*.exe
+
+# Bun
+bun.lockb
+.bun/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
 *.swp
-*.tmp
+*.swo
 *~
 
-# Test directories
+# macOS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Testing
+coverage/
+*.lcov
+.nyc_output/
 test/
+
+# Temporary files
 tmp/
+temp/
+*.tmp
+*.temp
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Cache
+.cache/
+.parcel-cache/
