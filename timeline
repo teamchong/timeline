@@ -741,10 +741,10 @@ if [ $# -gt 0 ]; then
             
             echo "Found ${#SESSION_LIST[@]} session(s)"
             echo ""
-            echo "🔄 Generating timeline view..."
+            echo "🔄 Generating timeline data..."
             echo ""
             
-            # Generate HTML output with tabs for multiple sessions
+            # Generate HTML output with dynamic rendering
             HTML_FILE="/tmp/timeline-view-$(date +%Y%m%d-%H%M%S).html"
             
             # Function to show progress
@@ -760,6 +760,142 @@ if [ $# -gt 0 ]; then
                 printf "%0.s─" $(seq $((filled + 1)) $width)
                 printf "] %3d%% (%d/%d sessions)" $percent $current $total
             }
+            
+            # Function to escape strings for JavaScript
+            escape_js() {
+                echo "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/'"'"'/\\'"'"'/g; s/\n/\\n/g; s/\r/\\r/g; s/\t/\\t/g'
+            }
+            
+            # Generate session data as JavaScript objects
+            echo "const timelineData = {" > /tmp/timeline-data.js
+            echo "  sessions: [" >> /tmp/timeline-data.js
+            
+            # Process each session to generate data
+            for session_idx in "${!SESSION_LIST[@]}"; do
+                session_id="${SESSION_LIST[$session_idx]}"
+                
+                # Show progress
+                show_progress $((session_idx + 1)) ${#SESSION_LIST[@]}
+                
+                # Get session info
+                session_file=""
+                for path in "$HOME/.claude/projects/-Users-steven-chong-Downloads-repos-timeline/${session_id}.jsonl" \
+                            "$HOME/.claude/projects/"*"/${session_id}.jsonl"; do
+                    if [ -f "$path" ]; then
+                        session_file="$path"
+                        break
+                    fi
+                done
+                
+                # Get session timestamps
+                session_create_datetime="Unknown"
+                session_modified_datetime="Unknown"
+                
+                if [ -f "$session_file" ]; then
+                    first_timestamp=$(grep -m 1 '"timestamp"' "$session_file" 2>/dev/null | jq -r '.timestamp // empty' 2>/dev/null | head -1)
+                    if [ -n "$first_timestamp" ]; then
+                        session_create_datetime="$first_timestamp"
+                    fi
+                    
+                    last_timestamp=$(grep '"timestamp"' "$session_file" 2>/dev/null | tail -1 | jq -r '.timestamp // empty' 2>/dev/null)
+                    if [ -n "$last_timestamp" ]; then
+                        session_modified_datetime="$last_timestamp"
+                    fi
+                fi
+                
+                # Start session object
+                echo "    {" >> /tmp/timeline-data.js
+                echo "      id: \"$(escape_js "$session_id")\"," >> /tmp/timeline-data.js
+                echo "      index: $session_idx," >> /tmp/timeline-data.js
+                echo "      created: \"$(escape_js "$session_create_datetime")\"," >> /tmp/timeline-data.js
+                echo "      modified: \"$(escape_js "$session_modified_datetime")\"," >> /tmp/timeline-data.js
+                echo "      timelines: [" >> /tmp/timeline-data.js
+                
+                # Get timelines for this session
+                SESSION_TIMELINES=()
+                for timeline in "${ALL_TIMELINES[@]}"; do
+                    commit_hash=$(git rev-parse "$timeline" 2>/dev/null)
+                    if [ -n "$commit_hash" ]; then
+                        notes=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null || true)
+                        if [ -n "$notes" ]; then
+                            sid=$(echo "$notes" | grep "^Session-Id:" | cut -d' ' -f2- | head -1)
+                            if [ "$sid" = "$session_id" ]; then
+                                SESSION_TIMELINES+=("$timeline")
+                            fi
+                        fi
+                    fi
+                done
+                
+                # Add timeline data
+                for ((i=${#SESSION_TIMELINES[@]}-1; i>=0; i--)); do
+                    DISPLAY_INDEX=$((${#SESSION_TIMELINES[@]} - 1 - i))
+                    BRANCH="${SESSION_TIMELINES[$i]}"
+                    
+                    commit_hash=$(git rev-parse "$BRANCH" 2>/dev/null)
+                    short_hash=$(git rev-parse --short "$BRANCH" 2>/dev/null)
+                    commit_time=$(git log -1 --pretty=format:"%cr" "$BRANCH" 2>/dev/null)
+                    commit_date=$(git log -1 --pretty=format:"%ci" "$BRANCH" 2>/dev/null)
+                    commit_msg=$(git log -1 --pretty=format:"%s" "$BRANCH" 2>/dev/null)
+                    
+                    # Get file statistics
+                    STATS=$(git diff --shortstat HEAD "$BRANCH" 2>/dev/null | sed 's/files\? changed/files/')
+                    files_changed=$(echo "$STATS" | grep -oE '[0-9]+ file' | grep -o '[0-9]*' | head -1)
+                    additions=$(echo "$STATS" | grep -oE '[0-9]+ insertion' | grep -o '[0-9]*' | head -1)
+                    deletions=$(echo "$STATS" | grep -oE '[0-9]+ deletion' | grep -o '[0-9]*' | head -1)
+                    
+                    # Get changed files list
+                    changed_files_json="["
+                    temp_files=$(mktemp)
+                    git diff --name-status HEAD "$BRANCH" 2>/dev/null > "$temp_files" || true
+                    first_file=true
+                    while IFS=$'\t' read -r status file; do
+                        if [ -n "$file" ]; then
+                            if [ "$first_file" = false ]; then
+                                changed_files_json="${changed_files_json},"
+                            fi
+                            changed_files_json="${changed_files_json}{\"status\":\"$status\",\"path\":\"$(escape_js "$file")\"}"
+                            first_file=false
+                        fi
+                    done < "$temp_files"
+                    rm -f "$temp_files"
+                    changed_files_json="${changed_files_json}]"
+                    
+                    echo "        {" >> /tmp/timeline-data.js
+                    echo "          branch: \"$(escape_js "$BRANCH")\"," >> /tmp/timeline-data.js
+                    echo "          hash: \"$(escape_js "$commit_hash")\"," >> /tmp/timeline-data.js
+                    echo "          shortHash: \"$(escape_js "$short_hash")\"," >> /tmp/timeline-data.js
+                    echo "          time: \"$(escape_js "$commit_time")\"," >> /tmp/timeline-data.js
+                    echo "          date: \"$(escape_js "$commit_date")\"," >> /tmp/timeline-data.js
+                    echo "          message: \"$(escape_js "$commit_msg")\"," >> /tmp/timeline-data.js
+                    echo "          displayIndex: $DISPLAY_INDEX," >> /tmp/timeline-data.js
+                    echo "          stats: {" >> /tmp/timeline-data.js
+                    echo "            filesChanged: ${files_changed:-0}," >> /tmp/timeline-data.js
+                    echo "            additions: ${additions:-0}," >> /tmp/timeline-data.js
+                    echo "            deletions: ${deletions:-0}" >> /tmp/timeline-data.js
+                    echo "          }," >> /tmp/timeline-data.js
+                    echo "          files: $changed_files_json" >> /tmp/timeline-data.js
+                    if [ $i -eq 0 ]; then
+                        echo "        }" >> /tmp/timeline-data.js
+                    else
+                        echo "        }," >> /tmp/timeline-data.js
+                    fi
+                done
+                
+                echo "      ]" >> /tmp/timeline-data.js
+                
+                if [ $session_idx -eq $((${#SESSION_LIST[@]} - 1)) ]; then
+                    echo "    }" >> /tmp/timeline-data.js
+                else
+                    echo "    }," >> /tmp/timeline-data.js
+                fi
+            done
+            
+            echo "  ]" >> /tmp/timeline-data.js
+            echo "};" >> /tmp/timeline-data.js
+            
+            # Clear progress line
+            printf "\r%*s\r" 80 ""
+            
             
             # Start HTML document with CDN libraries
             cat > "$HTML_FILE" << 'EOF'
