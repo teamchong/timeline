@@ -1262,7 +1262,10 @@ EOF
                     if [ -f "$session_file" ] && command -v jq >/dev/null 2>&1; then
                         # Extract recent messages from session
                         echo "                                                <!-- Recent session messages -->" >> "$HTML_FILE"
-                        grep '"role"' "$session_file" | tail -10 | while read -r line; do
+                        # Use temp file to avoid subshell issues
+                        temp_msgs=$(mktemp)
+                        grep '"role"' "$session_file" | tail -10 > "$temp_msgs" 2>/dev/null || true
+                        while read -r line; do
                             msg_role=$(echo "$line" | jq -r '.role' 2>/dev/null)
                             msg_content=$(echo "$line" | jq -r '.content' 2>/dev/null | head -c 200 | sed 's/"/\\"/g')
                             if [ -n "$msg_role" ] && [ -n "$msg_content" ]; then
@@ -1275,7 +1278,8 @@ EOF
                                         ;;
                                 esac
                             fi
-                        done
+                        done < "$temp_msgs"
+                        rm -f "$temp_msgs"
                     else
                         echo "                                                <p class=\"text-gray-400\">Transcript data not available or jq not installed</p>" >> "$HTML_FILE"
                     fi
@@ -1300,9 +1304,8 @@ EOF
                     echo "                                    </div>" >> "$HTML_FILE"
                     echo "                                </div>" >> "$HTML_FILE"
                     echo "                            </div>" >> "$HTML_FILE"
-                    echo "                            </div>" >> "$HTML_FILE"
-                        echo "                        </div>" >> "$HTML_FILE"
-                        echo "                    </div>" >> "$HTML_FILE"
+                    echo "                        </div>" >> "$HTML_FILE"
+                    echo "                    </div>" >> "$HTML_FILE"
                         done
                         
                         # Close timeline content div
