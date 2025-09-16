@@ -680,460 +680,825 @@ if [ $# -gt 0 ]; then
             echo "🗂️ Available Sessions:"
             echo ""
             
-            # Get all timeline branches and extract unique session IDs
-            ALL_TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/*" 2>/dev/null))
+            # Get ALL sessions from the project directory and sort by modification time
             SESSION_LIST=()
-            SEEN_SESSIONS=""
+            SESSION_FILES=()
+            PROJECT_DIR="$HOME/.claude/projects/-Users-steven-chong-Downloads-repos-timeline"
             
-            for timeline in "${ALL_TIMELINES[@]}"; do
-                # Get git notes to find session ID
-                commit_hash=$(git rev-parse "$timeline" 2>/dev/null)
-                if [ -n "$commit_hash" ]; then
-                    notes=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null || true)
-                    if [ -n "$notes" ]; then
-                        session_id=$(echo "$notes" | grep "^Session-Id:" | cut -d' ' -f2- | head -1)
-                        if [ -n "$session_id" ] && ! echo "$SEEN_SESSIONS" | grep -q "$session_id"; then
-                            SEEN_SESSIONS="$SEEN_SESSIONS $session_id"
-                            SESSION_LIST+=("$session_id")
-                        fi
+            # First, collect all session files with their modification times
+            if [ -d "$PROJECT_DIR" ]; then
+                for session_file in "$PROJECT_DIR"/*.jsonl; do
+                    if [ -f "$session_file" ]; then
+                        SESSION_FILES+=("$session_file")
                     fi
+                done
+            fi
+            
+            # Also check for any other project directories that might match
+            for proj_dir in "$HOME/.claude/projects/"*timeline*; do
+                if [ -d "$proj_dir" ] && [ "$proj_dir" != "$PROJECT_DIR" ]; then
+                    for session_file in "$proj_dir"/*.jsonl; do
+                        if [ -f "$session_file" ]; then
+                            # Avoid duplicates by checking if file name already exists
+                            session_id=$(basename "$session_file" .jsonl)
+                            found=0
+                            for existing_file in "${SESSION_FILES[@]}"; do
+                                if [ "$(basename "$existing_file" .jsonl)" = "$session_id" ]; then
+                                    found=1
+                                    break
+                                fi
+                            done
+                            if [ $found -eq 0 ]; then
+                                SESSION_FILES+=("$session_file")
+                            fi
+                        fi
+                    done
                 fi
             done
             
-            # If no sessions found, fall back to current session
+            # Sort files by modification time (newest first) and extract session IDs
+            if [ ${#SESSION_FILES[@]} -gt 0 ]; then
+                while IFS= read -r session_file; do
+                    session_id=$(basename "$session_file" .jsonl)
+                    SESSION_LIST+=("$session_id")
+                done < <(printf "%s\n" "${SESSION_FILES[@]}" | xargs -I {} stat -f "%m {}" {} 2>/dev/null | sort -rn | cut -d' ' -f2-)
+            fi
+            
+            # If still no sessions found, try current session
             if [ ${#SESSION_LIST[@]} -eq 0 ]; then
                 CURRENT_SESSION=$(get_current_claude_session)
                 if [ -n "$CURRENT_SESSION" ]; then
                     session_id=$(basename "$CURRENT_SESSION" .jsonl)
                     SESSION_LIST=("$session_id")
                 else
-                    echo "No sessions found with timeline data"
+                    echo "No sessions found"
                     exit 0
                 fi
             fi
             
-            # If only one session, auto-select it
-            if [ ${#SESSION_LIST[@]} -eq 1 ]; then
-                SELECTED_SESSION="${SESSION_LIST[0]}"
+            # Get all timeline branches for later use
+            ALL_TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/*" 2>/dev/null))
+            
+            echo "Found ${#SESSION_LIST[@]} session(s)"
+            echo ""
+            echo "🔄 Generating timeline view..."
+            echo ""
+            
+            # Generate HTML output with tabs for multiple sessions
+            HTML_FILE="/tmp/timeline-view-$(date +%Y%m%d-%H%M%S).html"
+            
+            # Function to show progress
+            show_progress() {
+                local current=$1
+                local total=$2
+                local width=50
+                local percent=$((current * 100 / total))
+                local filled=$((current * width / total))
                 
-                echo "Auto-selected session:"
-                # Use shared function to display stats
-                display_session_stats "$SELECTED_SESSION" "  "
+                printf "\r[" 
+                printf "%0.s═" $(seq 1 $filled)
+                printf "%0.s─" $(seq $((filled + 1)) $width)
+                printf "] %3d%% (%d/%d sessions)" $percent $current $total
+            }
+            
+            # Start HTML document with CDN libraries
+            cat > "$HTML_FILE" << 'EOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Timeline</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        'sans': ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+                        'mono': ['JetBrains Mono', 'monospace'],
+                    },
+                    animation: {
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        [x-cloak] { display: none !important; }
+        .timeline-gradient { background: linear-gradient(180deg, #10b981 0%, #34d399 50%, #6ee7b7 100%); }
+        .header-gradient { background: linear-gradient(135deg, #10b981 0%, #34d399 100%); }
+        .timeline-marker-glow {
+            box-shadow: 0 0 0 4px rgba(255,255,255,0.9), 0 0 0 6px rgba(16,185,129,0.3), 0 0 20px rgba(16,185,129,0.4);
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-green-100 via-emerald-50 to-teal-100 min-h-screen p-4 md:p-8">
+EOF
+                # Use a script tag instead of inline x-data to avoid escaping issues
+                cat >> "$HTML_FILE" << EOF
+    <div id="timeline-app" class="max-w-7xl mx-auto relative">
+    <script>
+        document.addEventListener('alpine:init', () => {
+            Alpine.data('timelineApp', () => ({
+                activeSession: 0,
+                totalSessions: ${#SESSION_LIST[@]},
+                selectedTimeline: null,
+                showDetails: {},
+                showResumeModal: false,
+                modalSessionId: '',
+                modalSessionCmd: '',
+                openResumeModal(sessionId) {
+                    this.modalSessionId = sessionId;
+                    this.modalSessionCmd = 'claude -r ' + sessionId;
+                    this.showResumeModal = true;
+                },
+                nextSession() {
+                    if (this.activeSession < this.totalSessions - 1) {
+                        this.activeSession++;
+                        this.scrollToSession();
+                    }
+                },
+                prevSession() {
+                    if (this.activeSession > 0) {
+                        this.activeSession--;
+                        this.scrollToSession();
+                    }
+                },
+                scrollToSession() {
+                    setTimeout(() => {
+                        const element = document.getElementById('session-' + this.activeSession);
+                        if (element) element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }, 100);
+                },
+                copyCommand(text, event) {
+                    navigator.clipboard.writeText(text);
+                    const el = event.target;
+                    const original = el.textContent;
+                    el.textContent = '✓';
+                    el.classList.add('!bg-green-600');
+                    setTimeout(() => {
+                        el.textContent = original;
+                        el.classList.remove('!bg-green-600');
+                    }, 1000);
+                },
+                renderCopyInput(text, placeholder = 'Click to select all') {
+                    return \`
+                        <div class="flex">
+                            <button @click="copyCommand('\${text}', \$event)"
+                                    class="px-3 py-3 bg-green-600 text-white rounded-l-lg hover:bg-green-700 transition-colors border border-green-600"
+                                    title="Copy to clipboard">
+                                📋
+                            </button>
+                            <input type="text" value="\${text}" readonly
+                                   class="flex-1 p-3 font-mono text-sm bg-gray-50 border-t border-b border-r border-gray-200 rounded-r-lg"
+                                   onfocus="setTimeout(() => this.select(), 0)" title="\${placeholder}">
+                        </div>
+                    \`;
+                },
+                formatLocalTime(timestamp) {
+                    const date = new Date(timestamp);
+                    return date.toLocaleString();
+                },
+                formatUTCTime(timestamp) {
+                    const date = new Date(timestamp);
+                    return date.toISOString().replace('T', ' ').replace(/\\.\\d{3}Z/, ' UTC');
+                }
+            }))
+        });
+    </script>
+    <div x-data="timelineApp">
+EOF
+                cat >> "$HTML_FILE" << 'EOF'
+        <div class="bg-white rounded-3xl shadow-2xl overflow-hidden">
+            <div class="header-gradient text-white p-8 md:p-12">
+                <div class="flex items-center justify-center mb-4">
+                    <svg class="w-12 h-12 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    <h1 class="text-4xl md:text-5xl font-bold">Timeline</h1>
+                </div>
+                <div class="text-center opacity-90 space-y-1">
+EOF
+                echo "                    <p class=\"text-sm\">📂 ${#SESSION_LIST[@]} Sessions</p>" >> "$HTML_FILE"
+                cat >> "$HTML_FILE" << 'EOF'
+                </div>
+            </div>
+            
+            <div class="p-8 md:p-12">
+                <!-- Session Accordion -->
+                <div class="space-y-4">
+EOF
                 
-                # Show timeline stats for this session (total file/line changes)
-                total_adds=0
-                total_dels=0
-                total_files=0
-                timeline_count=0
-                
-                for timeline in "${ALL_TIMELINES[@]}"; do
-                    commit_hash=$(git rev-parse "$timeline" 2>/dev/null)
-                    if [ -n "$commit_hash" ]; then
-                        # Check if this timeline belongs to this session
-                        notes=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null || true)
-                        if [ -n "$notes" ]; then
-                            session_id=$(echo "$notes" | grep "^Session-Id:" | cut -d' ' -f2- | head -1)
-                            if [ "$session_id" = "$SELECTED_SESSION" ] || [ -z "$session_id" ]; then
-                                # Count stats for this timeline
-                                STATS=$(git diff --shortstat HEAD "$timeline" 2>/dev/null | sed 's/files\? changed/files/' || echo "")
-                                if [ -n "$STATS" ]; then
-                                    adds=$(echo "$STATS" | grep -oE '[0-9]+ insertion' | grep -o '[0-9]*' | head -1)
-                                    dels=$(echo "$STATS" | grep -oE '[0-9]+ deletion' | grep -o '[0-9]*' | head -1)
-                                    files=$(echo "$STATS" | grep -oE '[0-9]+ file' | grep -o '[0-9]*' | head -1)
-                                    total_adds=$((total_adds + ${adds:-0}))
-                                    total_dels=$((total_dels + ${dels:-0}))
-                                    total_files=$((total_files + ${files:-0}))
-                                    timeline_count=$((timeline_count + 1))
-                                fi
+                # Generate accordion for each session
+                for session_idx in "${!SESSION_LIST[@]}"; do
+                    session_id="${SESSION_LIST[$session_idx]}"
+                    
+                    # Show progress
+                    show_progress $((session_idx + 1)) ${#SESSION_LIST[@]}
+                    
+                    # Get session info
+                    session_file=""
+                    for path in "$HOME/.claude/projects/-Users-steven-chong-Downloads-repos-timeline/${session_id}.jsonl" \
+                                "$HOME/.claude/projects/"*"/${session_id}.jsonl"; do
+                        if [ -f "$path" ]; then
+                            session_file="$path"
+                            break
+                        fi
+                    done
+                    
+                    # Get session create and modified datetimes
+                    session_create_datetime="Unknown"
+                    session_modified_datetime="Unknown"
+                    
+                    if [ -f "$session_file" ]; then
+                        # Get first timestamp (creation) with time
+                        first_timestamp=$(grep -m 1 '"timestamp"' "$session_file" 2>/dev/null | jq -r '.timestamp // empty' 2>/dev/null | head -1)
+                        if [ -n "$first_timestamp" ]; then
+                            # Format: 2024-01-15T14:30:22.123Z -> 2024-01-15 14:30
+                            session_create_datetime=$(echo "$first_timestamp" | sed 's/T/ /' | cut -d'.' -f1 | cut -c1-16)
+                        fi
+                        
+                        # Get last timestamp (modification) with time
+                        last_timestamp=$(grep '"timestamp"' "$session_file" 2>/dev/null | tail -1 | jq -r '.timestamp // empty' 2>/dev/null)
+                        if [ -n "$last_timestamp" ]; then
+                            # Format: 2024-01-15T14:30:22.123Z -> 2024-01-15 14:30
+                            session_modified_datetime=$(echo "$last_timestamp" | sed 's/T/ /' | cut -d'.' -f1 | cut -c1-16)
+                        fi
+                        
+                        # Use file modification time as fallback with time
+                        if [ "$session_modified_datetime" = "Unknown" ]; then
+                            file_mod_time=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$session_file" 2>/dev/null)
+                            if [ -n "$file_mod_time" ]; then
+                                session_modified_datetime="$file_mod_time"
+                            fi
+                        fi
+                        
+                        # Use file creation time as fallback for create time
+                        if [ "$session_create_datetime" = "Unknown" ]; then
+                            file_create_time=$(stat -f "%SB" -t "%Y-%m-%d %H:%M" "$session_file" 2>/dev/null)
+                            if [ -n "$file_create_time" ]; then
+                                session_create_datetime="$file_create_time"
                             fi
                         fi
                     fi
-                done
-                
-                if [ "$timeline_count" -gt 0 ]; then
-                    echo "  📊 $timeline_count timelines | $total_files files changed | +$total_adds -$total_dels lines"
-                else
-                    echo "  📊 No timelines found for this session"
-                fi
-                echo ""
-            else
-                # Display sessions with helpful info for multiple sessions
-                echo "Multiple sessions found:"
-                echo ""
-                for i in "${!SESSION_LIST[@]}"; do
-                    session_id="${SESSION_LIST[$i]}"
                     
-                    # Display session number and stats
-                    printf "  %2d) " "$i"
-                    display_session_stats "$session_id" ""
-                    
-                    # Show timeline stats for this session
-                    total_adds=0
-                    total_dels=0
-                    total_files=0
-                    timeline_count=0
-                    
+                    # Get timelines for this session
+                    SESSION_TIMELINES=()
                     for timeline in "${ALL_TIMELINES[@]}"; do
                         commit_hash=$(git rev-parse "$timeline" 2>/dev/null)
                         if [ -n "$commit_hash" ]; then
                             notes=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null || true)
                             if [ -n "$notes" ]; then
                                 sid=$(echo "$notes" | grep "^Session-Id:" | cut -d' ' -f2- | head -1)
-                                if [ "$sid" = "$session_id" ] || [ -z "$sid" ]; then
-                                    STATS=$(git diff --shortstat HEAD "$timeline" 2>/dev/null | sed 's/files\? changed/files/' || echo "")
-                                    if [ -n "$STATS" ]; then
-                                        adds=$(echo "$STATS" | grep -oE '[0-9]+ insertion' | grep -o '[0-9]*' | head -1)
-                                        dels=$(echo "$STATS" | grep -oE '[0-9]+ deletion' | grep -o '[0-9]*' | head -1)
-                                        files=$(echo "$STATS" | grep -oE '[0-9]+ file' | grep -o '[0-9]*' | head -1)
-                                        total_adds=$((total_adds + ${adds:-0}))
-                                        total_dels=$((total_dels + ${dels:-0}))
-                                        total_files=$((total_files + ${files:-0}))
-                                        timeline_count=$((timeline_count + 1))
-                                    fi
+                                if [ "$sid" = "$session_id" ]; then
+                                    SESSION_TIMELINES+=("$timeline")
                                 fi
                             fi
                         fi
                     done
                     
-                    if [ "$timeline_count" -gt 0 ]; then
-                        printf "      📊 %d timelines | %d files changed | +%d -%d lines\n" "$timeline_count" "$total_files" "$total_adds" "$total_dels"
+                    # Accordion item
+                    echo "                    <!-- Session $session_idx Accordion -->" >> "$HTML_FILE"
+                    echo "                    <div id=\"session-$session_idx\" class=\"bg-white rounded-xl shadow-lg overflow-hidden\">" >> "$HTML_FILE"
+                    echo "                        <!-- Accordion Header -->" >> "$HTML_FILE"
+                    echo "                        <div @click=\"activeSession = activeSession === $session_idx ? -1 : $session_idx\"" >> "$HTML_FILE"
+                    echo "                             class=\"p-6 cursor-pointer hover:bg-gray-50 transition-colors flex items-center justify-between\">" >> "$HTML_FILE"
+                    echo "                            <div class=\"flex items-center gap-4 flex-1\">" >> "$HTML_FILE"
+                    
+                    # Navigation buttons group at the very front
+                    echo "                                <div class=\"flex items-center gap-1\" @click.stop>" >> "$HTML_FILE"
+                    
+                    # Previous button (up arrow) - only if not first session
+                    if [ $session_idx -gt 0 ]; then
+                        echo "                                            <button @click.stop=\"activeSession = $((session_idx - 1)); scrollToSession()\"" >> "$HTML_FILE"
+                        echo "                                                    class=\"p-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition-colors\"" >> "$HTML_FILE"
+                        echo "                                                    title=\"Previous Session\">" >> "$HTML_FILE"
+                        echo "                                                <svg class=\"w-4 h-4\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\">" >> "$HTML_FILE"
+                        echo "                                                    <path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M5 15l7-7 7 7\"/>" >> "$HTML_FILE"
+                        echo "                                                </svg>" >> "$HTML_FILE"
+                        echo "                                            </button>" >> "$HTML_FILE"
                     else
-                        printf "      📊 No timelines found\n"
-                    fi
-                    echo ""
-                done
-                
-                echo ""
-                read -p "Select session number (or press Enter for session 0): " SESSION_CHOICE
-                
-                # Default to 0 if empty
-                if [ -z "$SESSION_CHOICE" ]; then
-                    SESSION_CHOICE=0
-                fi
-                
-                # Validate choice
-                if [ "$SESSION_CHOICE" -ge 0 ] && [ "$SESSION_CHOICE" -lt ${#SESSION_LIST[@]} ] 2>/dev/null; then
-                    SELECTED_SESSION="${SESSION_LIST[$SESSION_CHOICE]}"
-                    echo "Selected session: $SELECTED_SESSION"
-                    echo ""
-                else
-                    echo "Invalid selection"
-                    exit 1
-                fi
-            fi
-            
-            # Get timelines for selected session (include all, not just ones with changes)
-            TIMELINES=()
-            for timeline in "${ALL_TIMELINES[@]}"; do
-                commit_hash=$(git rev-parse "$timeline" 2>/dev/null)
-                if [ -n "$commit_hash" ]; then
-                    notes=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null || true)
-                    if [ -n "$notes" ]; then
-                        session_id=$(echo "$notes" | grep "^Session-Id:" | cut -d' ' -f2- | head -1)
-                        if [ "$session_id" = "$SELECTED_SESSION" ]; then
-                            TIMELINES+=("$timeline")
-                        fi
-                    fi
-                fi
-            done
-            
-            if [ ${#TIMELINES[@]} -eq 0 ]; then
-                echo "No timelines found for session '$SELECTED_SESSION'"
-                exit 0
-            fi
-            
-            # Generate the conversation view content
-            generate_view_content() {
-                echo "📋 Conversation & Timeline View"
-                echo "Session: $SELECTED_SESSION"
-                echo "==============================================="
-                echo "Found ${#TIMELINES[@]} timelines with changes"
-                echo ""
-                
-                # Generate Table of Contents
-                echo "📚 Timeline Summary:"
-                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                for ((i=${#TIMELINES[@]}-1; i>=0; i--)); do
-                    DISPLAY_INDEX=$((${#TIMELINES[@]} - 1 - i))
-                    BRANCH="${TIMELINES[$i]}"
-                    commit_time=$(git log -1 --pretty=format:"%cr" "$BRANCH" 2>/dev/null)  # relative time
-                    commit_msg=$(git log -1 --pretty=format:"%s" "$BRANCH" 2>/dev/null | head -c 60)
-                    printf "  #%-2d %-15s %s\n" "$DISPLAY_INDEX" "($commit_time)" "$commit_msg"
-                done
-                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                echo ""
-                echo "💡 TIP: Use './timeline travel <commit-hash>' to restore any timeline"
-                echo ""
-                
-                # Read the session JSONL file to get conversation flow
-                SESSION_FILE=""
-                for path in "$HOME/.claude/projects/-Users-steven-chong-Downloads-repos-timeline/${SELECTED_SESSION}.jsonl" \
-                            "$HOME/.claude/projects/"*"/${SELECTED_SESSION}.jsonl"; do
-                    if [ -f "$path" ]; then
-                        SESSION_FILE="$path"
-                        break
-                    fi
-                done
-                
-                if [ -f "$SESSION_FILE" ]; then
-                    echo "📖 Reading conversation from session file..."
-                    echo ""
-                    
-                    # Process conversation and interleave with timelines
-                    MESSAGE_NUM=0
-                    TIMELINE_INDEX=0
-                    
-                    while IFS= read -r line; do
-                        # Parse JSON line - role is inside message object
-                        role=$(echo "$line" | jq -r '.message.role // empty' 2>/dev/null)
-                        
-                        if [ "$role" = "user" ]; then
-                            # Check if this is a tool result (these are also marked as user messages)
-                            is_tool_result=$(echo "$line" | jq -r 'if (.message.content | type) == "array" then .message.content[0].type // "" else "" end' 2>/dev/null)
-                            
-                            if [ "$is_tool_result" = "tool_result" ]; then
-                                # This is a tool result, show it inline
-                                result_content=$(echo "$line" | jq -r '.message.content[0].content // "(No content)"' 2>/dev/null | head -10)
-                                echo "  ⎿  $result_content"
-                                echo ""
-                            else
-                                # Regular user message
-                                MESSAGE_NUM=$((MESSAGE_NUM + 1))
-                                echo ""
-                                
-                                # Extract user message content
-                                content=$(echo "$line" | jq -r '
-                                    if .message.content | type == "string" then 
-                                        .message.content
-                                    elif .message.content | type == "array" then
-                                        .message.content | map(select(.type == "text").text // empty) | join("\n")
-                                    else
-                                        empty
-                                    end' 2>/dev/null)
-                                
-                                if [ -n "$content" ]; then
-                                    echo "> $content"
-                                fi
-                                echo ""
-                            fi
-                            
-                        elif [ "$role" = "assistant" ]; then
-                            # Extract ALL content blocks (text, tool_use, etc.)
-                            content_array=$(echo "$line" | jq -c '.message.content' 2>/dev/null)
-                            
-                            if [ "$content_array" != "null" ] && [ -n "$content_array" ]; then
-                                # Check if it's a string or array
-                                if echo "$content_array" | jq -e 'type == "string"' >/dev/null 2>&1; then
-                                    # Single string content
-                                    text=$(echo "$content_array" | jq -r '.')
-                                    echo "⏺ $text"
-                                else
-                                    # Array of content blocks
-                                    block_count=$(echo "$content_array" | jq 'length')
-                                    for ((i=0; i<$block_count; i++)); do
-                                        block=$(echo "$content_array" | jq -c ".[$i]")
-                                        block_type=$(echo "$block" | jq -r '.type // "text"')
-                                        
-                                        if [ "$block_type" = "text" ]; then
-                                            text=$(echo "$block" | jq -r '.text // empty')
-                                            if [ -n "$text" ]; then
-                                                echo "⏺ $text"
-                                            fi
-                                        elif [ "$block_type" = "tool_use" ]; then
-                                            tool_name=$(echo "$block" | jq -r '.name // "unknown"')
-                                            tool_input=$(echo "$block" | jq -c '.input // {}')
-                                            
-                                            # Format tool calls like Claude Code does
-                                            if [ "$tool_name" = "Bash" ]; then
-                                                cmd=$(echo "$tool_input" | jq -r '.command // ""' | head -c 80)
-                                                echo "⏺ Bash($cmd)"
-                                            elif [ "$tool_name" = "Read" ]; then
-                                                file=$(echo "$tool_input" | jq -r '.file_path // ""' | head -c 80)
-                                                echo "⏺ Read($file)"
-                                            elif [ "$tool_name" = "Edit" ] || [ "$tool_name" = "Write" ]; then
-                                                file=$(echo "$tool_input" | jq -r '.file_path // ""')
-                                                echo "⏺ $tool_name($(basename "$file"))"
-                                            else
-                                                echo "⏺ $tool_name()"
-                                            fi
-                                        fi
-                                    done
-                                fi
-                            fi
-                            
-                            # Check if there's a corresponding timeline for this exchange
-                            if [ $TIMELINE_INDEX -lt ${#TIMELINES[@]} ]; then
-                                BRANCH="${TIMELINES[$TIMELINE_INDEX]}"
-                                commit_hash=$(git rev-parse "$BRANCH" 2>/dev/null)
-                                commit_time=$(git log -1 --pretty=format:"%ci" "$BRANCH" 2>/dev/null)
-                                commit_msg=$(git log -1 --pretty=format:"%s" "$BRANCH" 2>/dev/null)
-                                
-                                echo ""
-                                echo "  📍 Timeline Created: $commit_msg"
-                                echo "  🕒 Time: $commit_time"
-                                echo "  🔗 Restore: ./timeline travel $commit_hash"
-                                
-                                # Show file changes summary
-                                echo "  📁 Changes:"
-                                git diff --stat --color=never HEAD "$BRANCH" 2>/dev/null | head -5 | sed 's/^/    /'
-                                
-                                TIMELINE_INDEX=$((TIMELINE_INDEX + 1))
-                            fi
-                            echo ""
-                        fi
-                    done < "$SESSION_FILE"
-                    
-                else
-                    echo "⚠️  Could not find session file: $SELECTED_SESSION"
-                    echo ""
-                    
-                    # Fall back to showing timelines without conversation context
-                    for ((i=${#TIMELINES[@]}-1; i>=0; i--)); do
-                        # Calculate display index (0 = oldest, higher = newer)
-                        DISPLAY_INDEX=$((${#TIMELINES[@]} - 1 - i))
-                        BRANCH="${TIMELINES[$i]}"
-                        
-                        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                        echo "📍 Timeline #$DISPLAY_INDEX"
-                        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                        
-                        # Get commit details
-                        commit_hash=$(git rev-parse "$BRANCH" 2>/dev/null)
-                        commit_time=$(git log -1 --pretty=format:"%ci" "$BRANCH" 2>/dev/null)
-                        commit_msg=$(git log -1 --pretty=format:"%B" "$BRANCH" 2>/dev/null)
-                        
-                        echo "🕒 Time: $commit_time"
-                        echo "🔗 Restore: ./timeline travel $commit_hash"
-                        echo "📝 Commit Message:"
-                        echo "$commit_msg" | sed 's/^/   /'
-                        echo ""
-                        
-                        # Get conversation from git notes
-                        notes=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null || true)
-                        
-                        if [ -n "$notes" ]; then
-                        # Extract conversation details from notes
-                        user_request=$(echo "$notes" | grep "^User-Request-Full:" | cut -d' ' -f2- | head -1)
-                        assistant_response=$(echo "$notes" | grep "^Assistant-Response-Full:" | cut -d' ' -f2- | head -1)
-                        transcript_path=$(echo "$notes" | grep "^Transcript-Path:" | cut -d' ' -f2- | head -1)
-                        parent_msg_id=$(echo "$notes" | grep "^Parent-Message-Id:" | cut -d' ' -f2- | head -1)
-                        
-                        # Show conversation
-                        echo "💬 Conversation Context:"
-                        echo "─────────────────────────"
-                        
-                        if [ -n "$user_request" ]; then
-                            echo "👤 User Request:"
-                            echo "$user_request" | sed 's/^/   /'
-                            echo ""
-                        fi
-                        
-                        if [ -n "$assistant_response" ]; then
-                            echo "🤖 Claude Response:"
-                            echo "$assistant_response" | sed 's/^/   /'
-                            echo ""
-                        fi
-                        
-                        # If no stored conversation, try to extract from transcript
-                        if [ -z "$user_request" ] && [ -z "$assistant_response" ] && [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
-                            echo "📖 Extracting conversation from transcript..."
-                            
-                            # Get user request
-                            full_user_request=$(get_full_user_request_from_jsonl "$transcript_path" "$parent_msg_id" 2>/dev/null)
-                            if [ -n "$full_user_request" ]; then
-                                echo "👤 User Request:"
-                                echo "$full_user_request" | head -10 | sed 's/^/   /'
-                                echo ""
-                            fi
-                            
-                            # Get assistant response  
-                            full_assistant_response=$(get_full_assistant_response_from_jsonl "$transcript_path" "$parent_msg_id" 2>/dev/null)
-                            if [ -n "$full_assistant_response" ]; then
-                                echo "🤖 Claude Response:"
-                                echo "$full_assistant_response" | head -10 | sed 's/^/   /'
-                                echo ""
-                            fi
-                        fi
+                        echo "                                            <button disabled class=\"p-1 bg-gray-50 text-gray-300 rounded cursor-not-allowed\">" >> "$HTML_FILE"
+                        echo "                                                <svg class=\"w-4 h-4\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\">" >> "$HTML_FILE"
+                        echo "                                                    <path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M5 15l7-7 7 7\"/>" >> "$HTML_FILE"
+                        echo "                                                </svg>" >> "$HTML_FILE"
+                        echo "                                            </button>" >> "$HTML_FILE"
                     fi
                     
-                    # Show file changes with detailed breakdown
-                    echo "📁 File Changes:"
-                    echo "─────────────────"
-                    display_timeline_changes "$BRANCH" "HEAD"
+                    # Next button (down arrow) - only if not last session  
+                    if [ $session_idx -lt $((${#SESSION_LIST[@]} - 1)) ]; then
+                        echo "                                            <button @click.stop=\"activeSession = $((session_idx + 1)); scrollToSession()\"" >> "$HTML_FILE"
+                        echo "                                                    class=\"p-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition-colors\"" >> "$HTML_FILE"
+                        echo "                                                    title=\"Next Session\">" >> "$HTML_FILE"
+                        echo "                                                <svg class=\"w-4 h-4\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\">" >> "$HTML_FILE"
+                        echo "                                                    <path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M19 9l-7 7-7-7\"/>" >> "$HTML_FILE"
+                        echo "                                                </svg>" >> "$HTML_FILE"
+                        echo "                                            </button>" >> "$HTML_FILE"
+                    else
+                        echo "                                            <button disabled class=\"p-1 bg-gray-50 text-gray-300 rounded cursor-not-allowed\">" >> "$HTML_FILE"
+                        echo "                                                <svg class=\"w-4 h-4\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\">" >> "$HTML_FILE"
+                        echo "                                                    <path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M19 9l-7 7-7-7\"/>" >> "$HTML_FILE"
+                        echo "                                                </svg>" >> "$HTML_FILE"
+                        echo "                                            </button>" >> "$HTML_FILE"
+                    fi
                     
-                    echo ""
-                    echo "🔍 Detailed File Diff:"
-                    echo "─────────────────────"
+                    echo "                                </div>" >> "$HTML_FILE"
                     
-                    # Show actual file changes (first few lines)
-                    CHANGED_FILES=$(git diff --name-only HEAD "$BRANCH" 2>/dev/null | head -5)
-                    if [ -n "$CHANGED_FILES" ]; then
-                        while IFS= read -r file; do
+                    # Session info after navigation buttons
+                    echo "                                <div class=\"flex-1\">" >> "$HTML_FILE"
+                    echo "                                    <h3 class=\"text-lg font-semibold text-gray-900\">Session #$((session_idx + 1))</h3>" >> "$HTML_FILE"
+                    echo "                                    <p class=\"text-xs text-gray-500 font-mono break-all\">$session_id</p>" >> "$HTML_FILE"
+                    echo "                                    <p class=\"text-xs text-gray-500\">📅 Created: <span x-text=\"formatLocalTime('$session_create_datetime')\" :title=\"formatUTCTime('$session_create_datetime')\" class=\"cursor-help\"></span></p>" >> "$HTML_FILE"
+                    echo "                                    <p class=\"text-xs text-gray-500\">🕒 Modified: <span x-text=\"formatLocalTime('$session_modified_datetime')\" :title=\"formatUTCTime('$session_modified_datetime')\" class=\"cursor-help\"></span></p>" >> "$HTML_FILE"
+                    echo "                                </div>" >> "$HTML_FILE"
+                    
+                    # Right side badges and buttons
+                    echo "                                <div class=\"flex items-center gap-2\">" >> "$HTML_FILE"
+                    
+                    # Timeline count badge
+                    if [ ${#SESSION_TIMELINES[@]} -gt 0 ]; then
+                        echo "                                    <span class=\"px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium\">" >> "$HTML_FILE"
+                        echo "                                        ${#SESSION_TIMELINES[@]} timelines" >> "$HTML_FILE"
+                        echo "                                    </span>" >> "$HTML_FILE"
+                    else
+                        echo "                                    <span class=\"px-3 py-1 bg-gray-100 text-gray-500 rounded-full text-sm font-medium\">" >> "$HTML_FILE"
+                        echo "                                        No timelines yet" >> "$HTML_FILE"
+                        echo "                                    </span>" >> "$HTML_FILE"
+                    fi
+                    
+                    # Resume button with modal  
+                    echo "                                    <button @click.stop=\"openResumeModal('$session_id')\"" >> "$HTML_FILE"
+                    echo "                                            class=\"px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium hover:bg-green-200 transition-colors\">" >> "$HTML_FILE"
+                    echo "                                        📋 Resume" >> "$HTML_FILE"
+                    echo "                                    </button>" >> "$HTML_FILE"
+                    echo "                                </div>" >> "$HTML_FILE"
+                    echo "                            </div>" >> "$HTML_FILE"
+                    echo "                            <svg :class=\"activeSession === $session_idx ? 'rotate-180' : ''\"" >> "$HTML_FILE"
+                    echo "                                 class=\"w-6 h-6 text-gray-400 transition-transform\"" >> "$HTML_FILE"
+                    echo "                                 fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\">" >> "$HTML_FILE"
+                    echo "                                <path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M19 9l-7 7-7-7\"/>" >> "$HTML_FILE"
+                    echo "                            </svg>" >> "$HTML_FILE"
+                    echo "                        </div>" >> "$HTML_FILE"
+                    
+                    # Accordion content
+                    echo "                        <!-- Accordion Content -->" >> "$HTML_FILE"
+                    echo "                        <div x-show=\"activeSession === $session_idx\" x-cloak class=\"border-t border-gray-100\">" >> "$HTML_FILE"
+                    echo "                            <div class=\"p-6\">" >> "$HTML_FILE"
+                    
+                    # Resume command box
+                    echo "                                <!-- Resume Command -->" >> "$HTML_FILE"
+                    echo "                                <div class=\"mb-6\">" >> "$HTML_FILE"
+                    echo "                                    <p class=\"text-xs text-gray-600 mb-2\">Resume this session:</p>" >> "$HTML_FILE"
+                    echo "                                    <div x-html=\"renderCopyInput('claude -r $session_id', 'Focus to select all')\"></div>" >> "$HTML_FILE"
+                    echo "                                </div>" >> "$HTML_FILE"
+                    
+                    # Stats for this session (always show)
+                    if [ ${#SESSION_TIMELINES[@]} -gt 0 ]; then
+                        echo "                                <div class=\"grid grid-cols-1 md:grid-cols-3 gap-4 mb-8\">" >> "$HTML_FILE"
+                        echo "                                    <div class=\"bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl p-4 text-white\">" >> "$HTML_FILE"
+                        echo "                                        <div class=\"flex items-center justify-between\">" >> "$HTML_FILE"
+                        echo "                                            <div>" >> "$HTML_FILE"
+                        echo "                                                <p class=\"text-blue-100 text-sm\">Timelines in Session</p>" >> "$HTML_FILE"
+                        echo "                                                <p class=\"text-2xl font-bold\">${#SESSION_TIMELINES[@]}</p>" >> "$HTML_FILE"
+                        echo "                                            </div>" >> "$HTML_FILE"
+                        echo "                                            <svg class=\"w-10 h-10 opacity-50\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\">" >> "$HTML_FILE"
+                        echo "                                                <path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z\"/>" >> "$HTML_FILE"
+                        echo "                                            </svg>" >> "$HTML_FILE"
+                        echo "                                        </div>" >> "$HTML_FILE"
+                        echo "                                    </div>" >> "$HTML_FILE"
+                        echo "                                </div>" >> "$HTML_FILE"
+                    else
+                        # Show message for sessions without timelines
+                        echo "                                <div class=\"text-center py-8 text-gray-500\">" >> "$HTML_FILE"
+                        echo "                                    <svg class=\"w-16 h-16 mx-auto mb-4 text-gray-300\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\">" >> "$HTML_FILE"
+                        echo "                                        <path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z\"/>" >> "$HTML_FILE"
+                        echo "                                    </svg>" >> "$HTML_FILE"
+                        echo "                                    <p class=\"text-lg font-medium mb-2\">No timelines in this session yet</p>" >> "$HTML_FILE"
+                        echo "                                    <p class=\"text-sm\">Timelines will appear here as you make changes to your code</p>" >> "$HTML_FILE"
+                        echo "                                </div>" >> "$HTML_FILE"
+                    fi
+                    
+                    # Session-level tabs and content
+                    echo "                                <!-- Session Tabs -->" >> "$HTML_FILE"
+                    echo "                                <div x-data=\"{ sessionTab: 'timelines' }\" class=\"mt-6\">" >> "$HTML_FILE"
+                    echo "                                    <!-- Session Tab Navigation -->" >> "$HTML_FILE"
+                    echo "                                    <div class=\"flex border-b border-gray-200 mb-6\">" >> "$HTML_FILE"
+                    echo "                                        <button @click=\"sessionTab = 'timelines'\" " >> "$HTML_FILE"
+                    echo "                                                :class=\"sessionTab === 'timelines' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700'\"" >> "$HTML_FILE"
+                    echo "                                                class=\"px-6 py-3 border-b-2 font-medium text-sm transition-colors\">" >> "$HTML_FILE"
+                    echo "                                            ⏰ Timelines (${#SESSION_TIMELINES[@]})" >> "$HTML_FILE"
+                    echo "                                        </button>" >> "$HTML_FILE"
+                    echo "                                        <button @click=\"sessionTab = 'files'\" " >> "$HTML_FILE"
+                    echo "                                                :class=\"sessionTab === 'files' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700'\"" >> "$HTML_FILE"
+                    echo "                                                class=\"px-6 py-3 border-b-2 font-medium text-sm transition-colors\">" >> "$HTML_FILE"
+                    echo "                                            📁 All Files Changed" >> "$HTML_FILE"
+                    echo "                                        </button>" >> "$HTML_FILE"
+                    echo "                                        <button @click=\"sessionTab = 'diff'\" " >> "$HTML_FILE"
+                    echo "                                                :class=\"sessionTab === 'diff' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700'\"" >> "$HTML_FILE"
+                    echo "                                                class=\"px-6 py-3 border-b-2 font-medium text-sm transition-colors\">" >> "$HTML_FILE"
+                    echo "                                            🔍 Full Session Diff" >> "$HTML_FILE"
+                    echo "                                        </button>" >> "$HTML_FILE"
+                    echo "                                        <button @click=\"sessionTab = 'transcript'\" " >> "$HTML_FILE"
+                    echo "                                                :class=\"sessionTab === 'transcript' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700'\"" >> "$HTML_FILE"
+                    echo "                                                class=\"px-6 py-3 border-b-2 font-medium text-sm transition-colors\">" >> "$HTML_FILE"
+                    echo "                                            💬 Full Transcript" >> "$HTML_FILE"
+                    echo "                                        </button>" >> "$HTML_FILE"
+                    echo "                                    </div>" >> "$HTML_FILE"
+                    echo "                                    " >> "$HTML_FILE"
+                    echo "                                    <!-- Timelines Tab -->" >> "$HTML_FILE"
+                    echo "                                    <div x-show=\"sessionTab === 'timelines'\">" >> "$HTML_FILE"
+                    
+                    # Only show timeline content if there are timelines
+                    if [ ${#SESSION_TIMELINES[@]} -gt 0 ]; then
+                        echo "                                        <!-- Timeline Content -->" >> "$HTML_FILE"
+                        echo "                                        <div class=\"relative\">" >> "$HTML_FILE"
+                        echo "                                    <!-- Vertical Line -->" >> "$HTML_FILE"
+                        echo "                                    <div class=\"absolute left-8 top-0 bottom-0 w-0.5 timeline-gradient\"></div>" >> "$HTML_FILE"
+                        
+                        # Generate timeline items for this session
+                        for ((i=${#SESSION_TIMELINES[@]}-1; i>=0; i--)); do
+                        DISPLAY_INDEX=$((${#SESSION_TIMELINES[@]} - 1 - i))
+                        BRANCH="${SESSION_TIMELINES[$i]}"
+                    
+                    commit_hash=$(git rev-parse "$BRANCH" 2>/dev/null)
+                    short_hash=$(git rev-parse --short "$BRANCH" 2>/dev/null)
+                    commit_time=$(git log -1 --pretty=format:"%cr" "$BRANCH" 2>/dev/null)
+                    commit_date=$(git log -1 --pretty=format:"%ci" "$BRANCH" 2>/dev/null)
+                    commit_msg=$(git log -1 --pretty=format:"%s" "$BRANCH" 2>/dev/null)
+                    
+                    # Truncate message for preview
+                    if [ ${#commit_msg} -gt 60 ]; then
+                        commit_preview="${commit_msg:0:60}..."
+                    else
+                        commit_preview="$commit_msg"
+                    fi
+                    
+                    # Get file statistics
+                    STATS=$(git diff --shortstat HEAD "$BRANCH" 2>/dev/null | sed 's/files\? changed/files/')
+                    files_changed=$(echo "$STATS" | grep -oE '[0-9]+ file' | grep -o '[0-9]*' | head -1)
+                    additions=$(echo "$STATS" | grep -oE '[0-9]+ insertion' | grep -o '[0-9]*' | head -1)
+                    deletions=$(echo "$STATS" | grep -oE '[0-9]+ deletion' | grep -o '[0-9]*' | head -1)
+                    
+                    # Get changed files
+                    changed_files=$(git diff --name-status HEAD "$BRANCH" 2>/dev/null)
+                    file_count=$(echo "$changed_files" | wc -l | tr -d ' ')
+                    
+                    echo "                    <!-- Timeline Item #$DISPLAY_INDEX -->" >> "$HTML_FILE"
+                    echo "                    <div x-data=\"{ expanded: false }\" class=\"relative mb-8 ml-12\">" >> "$HTML_FILE"
+                    echo "                        <!-- Marker -->" >> "$HTML_FILE"
+                    echo "                        <div @click=\"expanded = !expanded\" class=\"absolute -left-[2.75rem] w-6 h-6 bg-white rounded-full border-4 border-green-500 timeline-marker-glow cursor-pointer hover:scale-110 transition-transform\" title=\"Click to expand/collapse\"></div>" >> "$HTML_FILE"
+                    echo "                        " >> "$HTML_FILE"
+                    echo "                        <!-- Content Card -->" >> "$HTML_FILE"
+                    echo "                        <div class=\"bg-white rounded-xl shadow-lg hover:shadow-xl transition-shadow border border-gray-100\">" >> "$HTML_FILE"
+                    echo "                            <!-- Header (Always Visible) -->" >> "$HTML_FILE"
+                    echo "                            <div @click=\"expanded = !expanded\" class=\"p-4 cursor-pointer hover:bg-gray-50 transition-colors rounded-t-xl\">" >> "$HTML_FILE"
+                    echo "                                <div class=\"flex items-start justify-between\">" >> "$HTML_FILE"
+                    echo "                                    <div class=\"flex-1\">" >> "$HTML_FILE"
+                    echo "                                        <div class=\"flex items-center gap-2 text-sm text-gray-500 mb-1\">" >> "$HTML_FILE"
+                    echo "                                            <span>⏰ $commit_time</span>" >> "$HTML_FILE"
+                    echo "                                            <span class=\"text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full font-medium\">#$DISPLAY_INDEX</span>" >> "$HTML_FILE"
+                    echo "                                        </div>" >> "$HTML_FILE"
+                    echo "                                        <h3 class=\"font-semibold text-gray-900\">$commit_preview</h3>" >> "$HTML_FILE"
+                    echo "                                        <div class=\"flex items-center gap-4 mt-2 text-sm\">" >> "$HTML_FILE"
+                    echo "                                            <span class=\"text-gray-600\">📁 ${files_changed:-0} files</span>" >> "$HTML_FILE"
+                    echo "                                            <span class=\"text-green-600\">+${additions:-0}</span>" >> "$HTML_FILE"
+                    echo "                                            <span class=\"text-red-600\">-${deletions:-0}</span>" >> "$HTML_FILE"
+                    echo "                                            <span class=\"font-mono text-xs bg-gray-100 px-2 py-1 rounded\">$short_hash</span>" >> "$HTML_FILE"
+                    echo "                                        </div>" >> "$HTML_FILE"
+                    echo "                                    </div>" >> "$HTML_FILE"
+                    echo "                                    <svg :class=\"expanded ? 'rotate-180' : ''\" class=\"w-5 h-5 text-gray-400 transition-transform\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\">" >> "$HTML_FILE"
+                    echo "                                        <path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M19 9l-7 7-7-7\"/>" >> "$HTML_FILE"
+                    echo "                                    </svg>" >> "$HTML_FILE"
+                    echo "                                </div>" >> "$HTML_FILE"
+                    echo "                            </div>" >> "$HTML_FILE"
+                    echo "                            " >> "$HTML_FILE"
+                    echo "                            <!-- Expandable Details -->" >> "$HTML_FILE"
+                    echo "                            <div x-show=\"expanded\" x-collapse x-cloak class=\"border-t border-gray-100\">" >> "$HTML_FILE"
+                    echo "                                <!-- Tab Navigation -->" >> "$HTML_FILE"
+                    echo "                                <div x-data=\"{ activeTab: 'files' }\" class=\"p-4\">" >> "$HTML_FILE"
+                    echo "                                    <div class=\"flex border-b border-gray-200 mb-4\">" >> "$HTML_FILE"
+                    echo "                                        <button @click=\"activeTab = 'files'\" " >> "$HTML_FILE"
+                    echo "                                                :class=\"activeTab === 'files' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700'\"" >> "$HTML_FILE"
+                    echo "                                                class=\"px-4 py-2 border-b-2 font-medium text-sm transition-colors\">" >> "$HTML_FILE"
+                    echo "                                            📁 Files Changed" >> "$HTML_FILE"
+                    echo "                                        </button>" >> "$HTML_FILE"
+                    echo "                                        <button @click=\"activeTab = 'diff'\" " >> "$HTML_FILE"
+                    echo "                                                :class=\"activeTab === 'diff' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700'\"" >> "$HTML_FILE"
+                    echo "                                                class=\"px-4 py-2 border-b-2 font-medium text-sm transition-colors\">" >> "$HTML_FILE"
+                    echo "                                            🔍 Full Diff" >> "$HTML_FILE"
+                    echo "                                        </button>" >> "$HTML_FILE"
+                    echo "                                        <button @click=\"activeTab = 'transcript'\" " >> "$HTML_FILE"
+                    echo "                                                :class=\"activeTab === 'transcript' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700'\"" >> "$HTML_FILE"
+                    echo "                                                class=\"px-4 py-2 border-b-2 font-medium text-sm transition-colors\">" >> "$HTML_FILE"
+                    echo "                                            💬 Transcript" >> "$HTML_FILE"
+                    echo "                                        </button>" >> "$HTML_FILE"
+                    echo "                                    </div>" >> "$HTML_FILE"
+                    echo "                                    " >> "$HTML_FILE"
+                    echo "                                    <!-- Files Tab -->" >> "$HTML_FILE"
+                    echo "                                    <div x-show=\"activeTab === 'files'\" class=\"space-y-3\">" >> "$HTML_FILE"
+                    
+                    # Full commit message if different from preview
+                    if [ "$commit_msg" != "$commit_preview" ]; then
+                        echo "                                    <div class=\"text-sm text-gray-700 p-3 bg-gray-50 rounded-lg\">" >> "$HTML_FILE"
+                        echo "                                        <p class=\"font-medium mb-1\">Full Message:</p>" >> "$HTML_FILE"
+                        echo "                                        <p>$commit_msg</p>" >> "$HTML_FILE"
+                        echo "                                    </div>" >> "$HTML_FILE"
+                    fi
+                    
+                    echo "                                    <div class=\"text-sm text-gray-700\">" >> "$HTML_FILE"
+                    echo "                                        <p class=\"font-medium mb-2\">Changed Files ($file_count):</p>" >> "$HTML_FILE"
+                    echo "                                        <div class=\"max-h-48 overflow-y-auto space-y-1\">" >> "$HTML_FILE"
+                    
+                    if [ -n "$changed_files" ]; then
+                        echo "$changed_files" | while IFS=$'\t' read -r status file; do
                             if [ -n "$file" ]; then
-                                echo "   📄 $file:"
-                                # Show first 5 lines of changes
-                                DIFF=$(git diff HEAD "$BRANCH" -- "$file" 2>/dev/null | grep '^[+-]' | grep -v '^+++\|^---' | head -5)
-                                if [ -n "$DIFF" ]; then
-                                    echo "$DIFF" | sed 's/^/      /'
-                                else
-                                    echo "      (no visible diff content)"
-                                fi
-                                echo ""
+                                case "$status" in
+                                    A) badge_class="bg-green-100 text-green-700" status_text="Added" ;;
+                                    M) badge_class="bg-yellow-100 text-yellow-700" status_text="Modified" ;;
+                                    D) badge_class="bg-red-100 text-red-700" status_text="Deleted" ;;
+                                    *) badge_class="bg-gray-100 text-gray-700" status_text="$status" ;;
+                                esac
+                                echo "                                            <div class=\"flex items-center gap-2 font-mono text-xs\">" >> "$HTML_FILE"
+                                echo "                                                <span class=\"px-1.5 py-0.5 rounded $badge_class\">$status_text</span>" >> "$HTML_FILE"
+                                echo "                                                <span class=\"text-gray-600\">$file</span>" >> "$HTML_FILE"
+                                echo "                                            </div>" >> "$HTML_FILE"
                             fi
-                        done <<< "$CHANGED_FILES"
+                        done
                     fi
                     
-                    echo ""
-                    done
-                fi
+                    echo "                                        </div>" >> "$HTML_FILE"
+                    echo "                                    </div>" >> "$HTML_FILE"
+                    echo "                                    </div>" >> "$HTML_FILE"
+                    echo "                                    " >> "$HTML_FILE"
+                    echo "                                    <!-- Full Diff Tab -->" >> "$HTML_FILE"
+                    echo "                                    <div x-show=\"activeTab === 'diff'\" class=\"space-y-3\">" >> "$HTML_FILE"
+                    echo "                                        <div class=\"text-sm text-gray-700\">" >> "$HTML_FILE"
+                    echo "                                            <p class=\"font-medium mb-2\">Full Diff View:</p>" >> "$HTML_FILE"
+                    echo "                                            <div class=\"bg-gray-900 text-gray-100 p-4 rounded-lg font-mono text-xs overflow-x-auto max-h-96 overflow-y-auto\">" >> "$HTML_FILE"
+                    
+                    # Generate diff content
+                    diff_content=$(git diff HEAD "$BRANCH" 2>/dev/null | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g')
+                    if [ -n "$diff_content" ]; then
+                        echo "                                                <pre>$diff_content</pre>" >> "$HTML_FILE"
+                    else
+                        echo "                                                <p class=\"text-gray-400\">No diff available</p>" >> "$HTML_FILE"
+                    fi
+                    
+                    echo "                                            </div>" >> "$HTML_FILE"
+                    echo "                                        </div>" >> "$HTML_FILE"
+                    echo "                                    </div>" >> "$HTML_FILE"
+                    echo "                                    " >> "$HTML_FILE"
+                    echo "                                    <!-- Transcript Tab -->" >> "$HTML_FILE"
+                    echo "                                    <div x-show=\"activeTab === 'transcript'\" class=\"space-y-3\">" >> "$HTML_FILE"
+                    echo "                                        <div class=\"text-sm text-gray-700\">" >> "$HTML_FILE"
+                    echo "                                            <p class=\"font-medium mb-2\">Session Transcript:</p>" >> "$HTML_FILE"
+                    echo "                                            <div class=\"bg-gray-50 p-4 rounded-lg max-h-96 overflow-y-auto\">" >> "$HTML_FILE"
+                    
+                    # Generate transcript content from session file
+                    if [ -f "$session_file" ] && command -v jq >/dev/null 2>&1; then
+                        # Extract recent messages from session
+                        echo "                                                <!-- Recent session messages -->" >> "$HTML_FILE"
+                        grep '"role"' "$session_file" | tail -10 | while read -r line; do
+                            msg_role=$(echo "$line" | jq -r '.role' 2>/dev/null)
+                            msg_content=$(echo "$line" | jq -r '.content' 2>/dev/null | head -c 200 | sed 's/"/\\"/g')
+                            if [ -n "$msg_role" ] && [ -n "$msg_content" ]; then
+                                case "$msg_role" in
+                                    "user") 
+                                        echo "                                                <div class=\"mb-2 p-2 bg-blue-100 rounded\"><strong>👤 User:</strong> $msg_content...</div>" >> "$HTML_FILE"
+                                        ;;
+                                    "assistant") 
+                                        echo "                                                <div class=\"mb-2 p-2 bg-green-100 rounded\"><strong>🤖 Assistant:</strong> $msg_content...</div>" >> "$HTML_FILE"
+                                        ;;
+                                esac
+                            fi
+                        done
+                    else
+                        echo "                                                <p class=\"text-gray-400\">Transcript data not available or jq not installed</p>" >> "$HTML_FILE"
+                    fi
+                    
+                    echo "                                            </div>" >> "$HTML_FILE"
+                    echo "                                        </div>" >> "$HTML_FILE"
+                    echo "                                    </div>" >> "$HTML_FILE"
+                    echo "                                    " >> "$HTML_FILE"
+                    echo "                                    <div class=\"pt-3 border-t border-gray-100\">" >> "$HTML_FILE"
+                    echo "                                        <div class=\"text-sm text-gray-700 mb-2\">" >> "$HTML_FILE"
+                    echo "                                            <p class=\"font-medium\">Time Travel Command:</p>" >> "$HTML_FILE"
+                    echo "                                        </div>" >> "$HTML_FILE"
+                    echo "                                        <div class=\"flex items-stretch border border-gray-300 rounded-lg overflow-hidden bg-white\">" >> "$HTML_FILE"
+                    echo "                                            <input type=\"text\" value=\"timeline travel $short_hash\" readonly" >> "$HTML_FILE"
+                    echo "                                                   class=\"flex-1 px-3 py-2 bg-gray-50 border-none font-mono text-sm text-gray-700 focus:outline-none\"" >> "$HTML_FILE"
+                    echo "                                                   @focus=\"\$event.target.select()\">" >> "$HTML_FILE"
+                    echo "                                            <button @click=\"copyCommand('timeline travel $short_hash', \$event)\"" >> "$HTML_FILE"
+                    echo "                                                    class=\"px-3 py-2 bg-gray-100 hover:bg-gray-200 transition-colors border-l border-gray-300 text-gray-600 hover:text-gray-800\">" >> "$HTML_FILE"
+                    echo "                                                📋" >> "$HTML_FILE"
+                    echo "                                            </button>" >> "$HTML_FILE"
+                    echo "                                        </div>" >> "$HTML_FILE"
+                    echo "                                    </div>" >> "$HTML_FILE"
+                    echo "                                </div>" >> "$HTML_FILE"
+                    echo "                            </div>" >> "$HTML_FILE"
+                    echo "                            </div>" >> "$HTML_FILE"
+                        echo "                        </div>" >> "$HTML_FILE"
+                        echo "                    </div>" >> "$HTML_FILE"
+                        done
+                        
+                        # Close timeline content div
+                        echo "                                        </div>" >> "$HTML_FILE"
+                    else
+                        echo "                                        <div class=\"text-center py-8 text-gray-500\">" >> "$HTML_FILE"
+                        echo "                                            <p>No timelines in this session yet</p>" >> "$HTML_FILE"
+                        echo "                                        </div>" >> "$HTML_FILE"
+                    fi
+                    echo "                                    </div>" >> "$HTML_FILE"
+                    echo "                                    " >> "$HTML_FILE"
+                    
+                    # Add other session-level tabs
+                    echo "                                    <!-- All Files Changed Tab -->" >> "$HTML_FILE"
+                    echo "                                    <div x-show=\"sessionTab === 'files'\" class=\"space-y-4\">" >> "$HTML_FILE"
+                    echo "                                        <div class=\"bg-white rounded-lg border border-gray-200 p-6\">" >> "$HTML_FILE"
+                    echo "                                            <h3 class=\"font-semibold text-gray-900 mb-4\">All Files Changed in This Session</h3>" >> "$HTML_FILE"
+                    
+                    # Collect all changed files across all timelines in this session
+                    if [ ${#SESSION_TIMELINES[@]} -gt 0 ]; then
+                        echo "                                            <div class=\"space-y-2 max-h-96 overflow-y-auto\">" >> "$HTML_FILE"
+                        
+                        # Get all unique files changed across timelines
+                        for timeline_branch in "${SESSION_TIMELINES[@]}"; do
+                            changed_files=$(git diff --name-status HEAD "$timeline_branch" 2>/dev/null)
+                            if [ -n "$changed_files" ]; then
+                                # Use a temporary file to avoid subshell issues
+                                temp_file=$(mktemp)
+                                echo "$changed_files" > "$temp_file"
+                                while IFS=$'\t' read -r status file; do
+                                    if [ -n "$file" ]; then
+                                        case "$status" in
+                                            A) badge_class="bg-green-100 text-green-700" status_text="Added" ;;
+                                            M) badge_class="bg-yellow-100 text-yellow-700" status_text="Modified" ;;
+                                            D) badge_class="bg-red-100 text-red-700" status_text="Deleted" ;;
+                                            *) badge_class="bg-gray-100 text-gray-700" status_text="$status" ;;
+                                        esac
+                                        echo "                                                <div class=\"flex items-center justify-between p-3 bg-gray-50 rounded-lg\">" >> "$HTML_FILE"
+                                        echo "                                                    <span class=\"font-mono text-sm\">📄 $file</span>" >> "$HTML_FILE"
+                                        echo "                                                    <span class=\"px-2 py-1 text-xs rounded-full $badge_class\">$status_text</span>" >> "$HTML_FILE"
+                                        echo "                                                </div>" >> "$HTML_FILE"
+                                    fi
+                                done < "$temp_file"
+                                rm -f "$temp_file"
+                            fi
+                        done
+                        
+                        echo "                                            </div>" >> "$HTML_FILE"
+                    else
+                        echo "                                            <p class=\"text-gray-500\">No files changed in this session</p>" >> "$HTML_FILE"
+                    fi
+                    echo "                                        </div>" >> "$HTML_FILE"
+                    echo "                                    </div>" >> "$HTML_FILE"
+                    echo "                                    " >> "$HTML_FILE"
+                    
+                    echo "                                    <!-- Full Session Diff Tab -->" >> "$HTML_FILE"
+                    echo "                                    <div x-show=\"sessionTab === 'diff'\" class=\"space-y-4\">" >> "$HTML_FILE"
+                    echo "                                        <div class=\"bg-white rounded-lg border border-gray-200 p-6\">" >> "$HTML_FILE"
+                    echo "                                            <h3 class=\"font-semibold text-gray-900 mb-4\">Complete Session Diff</h3>" >> "$HTML_FILE"
+                    echo "                                            <div class=\"bg-gray-900 text-gray-100 p-4 rounded-lg font-mono text-xs overflow-x-auto max-h-96 overflow-y-auto\">" >> "$HTML_FILE"
+                    
+                    # Generate combined diff for all timelines in session
+                    if [ ${#SESSION_TIMELINES[@]} -gt 0 ]; then
+                        # Get the earliest timeline to compare against
+                        earliest_timeline="${SESSION_TIMELINES[$((${#SESSION_TIMELINES[@]} - 1))]}"
+                        session_diff=$(git diff HEAD "$earliest_timeline" 2>/dev/null | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g')
+                        if [ -n "$session_diff" ]; then
+                            echo "                                                <pre>$session_diff</pre>" >> "$HTML_FILE"
+                        else
+                            echo "                                                <p class=\"text-gray-400\">No diff available</p>" >> "$HTML_FILE"
+                        fi
+                    else
+                        echo "                                                <p class=\"text-gray-400\">No timelines in this session</p>" >> "$HTML_FILE"
+                    fi
+                    
+                    echo "                                            </div>" >> "$HTML_FILE"
+                    echo "                                        </div>" >> "$HTML_FILE"
+                    echo "                                    </div>" >> "$HTML_FILE"
+                    echo "                                    " >> "$HTML_FILE"
+                    
+                    echo "                                    <!-- Full Session Transcript Tab -->" >> "$HTML_FILE"
+                    echo "                                    <div x-show=\"sessionTab === 'transcript'\" class=\"space-y-4\">" >> "$HTML_FILE"
+                    echo "                                        <div class=\"bg-white rounded-lg border border-gray-200 p-6\">" >> "$HTML_FILE"
+                    echo "                                            <h3 class=\"font-semibold text-gray-900 mb-4\">Complete Session Transcript</h3>" >> "$HTML_FILE"
+                    echo "                                            <div class=\"bg-gray-50 p-4 rounded-lg max-h-96 overflow-y-auto space-y-3\">" >> "$HTML_FILE"
+                    
+                    # Generate full session transcript
+                    if [ -f "$session_file" ] && command -v jq >/dev/null 2>&1; then
+                        echo "                                                <!-- Full session messages -->" >> "$HTML_FILE"
+                        # Use a temporary file to avoid subshell issues
+                        temp_transcript=$(mktemp)
+                        grep '"role"' "$session_file" > "$temp_transcript" 2>/dev/null || true
+                        while read -r line; do
+                            msg_role=$(echo "$line" | jq -r '.role' 2>/dev/null)
+                            msg_content=$(echo "$line" | jq -r '.content' 2>/dev/null | head -c 300 | sed 's/"/\\"/g')
+                            if [ -n "$msg_role" ] && [ -n "$msg_content" ]; then
+                                case "$msg_role" in
+                                    "user") 
+                                        echo "                                                <div class=\"p-3 bg-blue-50 border-l-4 border-blue-400 rounded-r-lg\">" >> "$HTML_FILE"
+                                        echo "                                                    <div class=\"flex items-start gap-3\">" >> "$HTML_FILE"
+                                        echo "                                                        <span class=\"text-blue-600 font-semibold\">👤 User:</span>" >> "$HTML_FILE"
+                                        echo "                                                        <div class=\"text-sm text-gray-700 flex-1\">$msg_content...</div>" >> "$HTML_FILE"
+                                        echo "                                                    </div>" >> "$HTML_FILE"
+                                        echo "                                                </div>" >> "$HTML_FILE"
+                                        ;;
+                                    "assistant") 
+                                        echo "                                                <div class=\"p-3 bg-green-50 border-l-4 border-green-400 rounded-r-lg\">" >> "$HTML_FILE"
+                                        echo "                                                    <div class=\"flex items-start gap-3\">" >> "$HTML_FILE"
+                                        echo "                                                        <span class=\"text-green-600 font-semibold\">🤖 Assistant:</span>" >> "$HTML_FILE"
+                                        echo "                                                        <div class=\"text-sm text-gray-700 flex-1\">$msg_content...</div>" >> "$HTML_FILE"
+                                        echo "                                                    </div>" >> "$HTML_FILE"
+                                        echo "                                                </div>" >> "$HTML_FILE"
+                                        ;;
+                                esac
+                            fi
+                        done < "$temp_transcript"
+                        rm -f "$temp_transcript"
+                    else
+                        echo "                                                <p class=\"text-gray-400\">Session transcript not available or jq not installed</p>" >> "$HTML_FILE"
+                    fi
+                    
+                    echo "                                            </div>" >> "$HTML_FILE"
+                    echo "                                        </div>" >> "$HTML_FILE"
+                    echo "                                    </div>" >> "$HTML_FILE"
+                    echo "                                </div>" >> "$HTML_FILE"
+                    
+                    # Close accordion content divs
+                    echo "                            </div>" >> "$HTML_FILE"
+                    echo "                        </div>" >> "$HTML_FILE"
+                    echo "                    </div>" >> "$HTML_FILE"
+                done
                 
-                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                echo "📊 Session Summary"
-                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                echo "Session: $SELECTED_SESSION"
-                echo "Total Timelines: ${#TIMELINES[@]}"
-                if [ ${#TIMELINES[@]} -gt 0 ]; then
-                    LAST_IDX=$((${#TIMELINES[@]} - 1))
-                    echo "Time Range: $(git log -1 --pretty=format:"%ci" "${TIMELINES[$LAST_IDX]}" 2>/dev/null) to $(git log -1 --pretty=format:"%ci" "${TIMELINES[0]}" 2>/dev/null)"
-                fi
+                # Clear the progress line
+                printf "\r%*s\r" 80 ""
+                
+                cat >> "$HTML_FILE" << 'EOF'
+            </div>
+        </div>
+        
+        <!-- Resume Session Modal -->
+        <div x-show="showResumeModal" 
+             x-cloak
+             class="fixed inset-0 z-50 flex items-center justify-center"
+             style="background-color: rgba(0,0,0,0.5);">
+            <div @click.away="showResumeModal = false"
+                 class="bg-white rounded-xl shadow-2xl border border-gray-200 p-6 max-w-md w-full mx-4">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-gray-900">Resume Session</h3>
+                    <button @click="showResumeModal = false" 
+                            class="text-gray-400 hover:text-gray-600 transition-colors">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                
+                <p class="text-sm text-gray-600 mb-4">Copy this command to resume the session:</p>
+                
+                <div class="mb-4" x-html="renderCopyInput(modalSessionCmd, 'Focus to select all')"></div>
+                
+                <div class="flex gap-3">
+                    <button @click="navigator.clipboard.writeText(modalSessionCmd); showResumeModal = false" 
+                            class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium">
+                        📋 Copy & Close
+                    </button>
+                    <button @click="showResumeModal = false" 
+                            class="flex-1 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-medium">
+                        ✕ Close
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    </div>  <!-- Close x-data div -->
+    </div>  <!-- Close timeline-app div -->
+</body>
+</html>
+EOF
+                
+                echo "✨ HTML timeline generated: $HTML_FILE"
                 echo ""
-                echo "This view shows the complete conversation flow and resulting code changes."
-                echo "Each timeline represents a point where Claude made changes in response to user requests."
-            }
-            
-            # Create temp file and open in editor
-            echo "⏳ Generating conversation view..."
-            
-            TIMELINE_FILE=$(mktemp)
-            generate_view_content > "$TIMELINE_FILE"
-            
-            echo "✅ Ready! Opening in editor..."
-            
-            # Determine which editor to use (respecting git config)
-            EDITOR_CMD=""
-            if [ -n "$GIT_EDITOR" ]; then
-                EDITOR_CMD="$GIT_EDITOR"
-            elif [ -n "$(git config --get core.editor 2>/dev/null)" ]; then
-                EDITOR_CMD="$(git config --get core.editor)"
-            elif [ -n "$VISUAL" ]; then
-                EDITOR_CMD="$VISUAL"
-            elif [ -n "$EDITOR" ]; then
-                EDITOR_CMD="$EDITOR"
-            elif command -v nano &> /dev/null; then
-                EDITOR_CMD="nano"
-            elif command -v vim &> /dev/null; then
-                EDITOR_CMD="vim"
-            elif command -v vi &> /dev/null; then
-                EDITOR_CMD="vi"
-            else
-                EDITOR_CMD="less"
-            fi
-            
-            # Open the timeline view
-            $EDITOR_CMD "$TIMELINE_FILE"
-            
-            # Clean up
-            rm -f "$TIMELINE_FILE"
+                echo "✅ Timeline view generated successfully!"
+                echo ""
+                
+                # Open in browser
+                if command -v open &> /dev/null; then
+                    open "$HTML_FILE"
+                    echo "📊 Opened in browser: $HTML_FILE"
+                elif command -v xdg-open &> /dev/null; then
+                    xdg-open "$HTML_FILE"
+                    echo "📊 Opened in browser: $HTML_FILE"
+                else
+                    echo "📊 View saved to: $HTML_FILE"
+                    echo "📝 Open this file in a browser to view the timeline"
+                fi
             ;;
         "browse")
             # Browse diffs using Git's configured diff tool
@@ -1211,520 +1576,338 @@ if [ $# -gt 0 ]; then
                                 echo "Select file to view in Cursor:"
                                 echo ""
                                 
-                                # Convert to array and display with proper formatting (bash 3.2 compatible)
-                                file_array=()
-                                while IFS= read -r file; do
-                                    if [ -n "$file" ]; then
-                                        file_array+=("$file")
-                                    fi
-                                done <<< "$changed_files"
-                                
-                                if [ ${#file_array[@]} -gt 0 ]; then
-                                    # Display files with simple numbering
-                                    for i in "${!file_array[@]}"; do
-                                        printf "  %d) %s\n" $((i + 1)) "${file_array[i]}"
-                                    done
-                                    echo ""
-                                    echo "  a) Open all files (sequentially)"
-                                    echo "  q) Go back to timeline selection"
-                                    echo ""
-                                    
-                                    while true; do
-                                        read -p "Select file number (1-${#file_array[@]}) or option: " choice
-                                        
-                                        if [ "$choice" = "q" ] || [ "$choice" = "Q" ] || [ -z "$choice" ]; then
-                                            break
-                                        elif [ "$choice" = "a" ] || [ "$choice" = "A" ]; then
-                                            # Open all files sequentially
-                                            echo "Opening all ${#file_array[@]} files..."
-                                            for file in "${file_array[@]}"; do
-                                                echo "📄 Opening: $file"
-                                                git difftool --no-prompt HEAD "$BRANCH" -- "$file"
-                                            done
-                                            break
-                                        elif [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#file_array[@]} ]; then
-                                            selected_file="${file_array[$((choice - 1))]}"
-                                            echo "📄 Opening: $selected_file"
-                                            
-                                            # Create temporary files for Cursor (bypass git difftool)
-                                            TEMP_DIR=$(mktemp -d)
-                                            # Clean basename as well to avoid issues
-                                            clean_basename=$(basename "$selected_file" | tr -d '\\')
-                                            HEAD_FILE="$TEMP_DIR/current_$clean_basename"
-                                            TIMELINE_FILE="$TEMP_DIR/timeline_$clean_basename"
-                                            
-                                            # Clean the filename of escape characters
-                                            clean_file=$(echo "$selected_file" | tr -d '\\')
-                                            echo "Selected: $selected_file"
-                                            echo "Cleaned: $clean_file"
-                                            
-                                            # Extract files
-                                            if git cat-file -e "HEAD:$clean_file" 2>/dev/null; then
-                                                git show "HEAD:$clean_file" > "$HEAD_FILE"
-                                                echo "Extracted current version"
-                                            else
-                                                echo "# File not in current version" > "$HEAD_FILE"
-                                                echo "Current version not found"
-                                            fi
-                                            
-                                            if git cat-file -e "$BRANCH:$clean_file" 2>/dev/null; then
-                                                git show "$BRANCH:$clean_file" > "$TIMELINE_FILE"
-                                                echo "Extracted timeline version"
-                                            else
-                                                echo "# File not in timeline version" > "$TIMELINE_FILE"
-                                                echo "Timeline version not found"
-                                            fi
-                                            
-                                            # Verify temp files exist
-                                            echo "Temp files created:"
-                                            echo "  HEAD: $HEAD_FILE ($([ -f "$HEAD_FILE" ] && echo "exists" || echo "missing"))"
-                                            echo "  TIMELINE: $TIMELINE_FILE ($([ -f "$TIMELINE_FILE" ] && echo "exists" || echo "missing"))"
-                                            
-                                            # Use configured diff tool with our temp files
-                                            DIFF_CMD=$(git config difftool.${DIFF_TOOL}.cmd)
-                                            if [ -n "$DIFF_CMD" ]; then
-                                                # Replace $LOCAL and $REMOTE with our temp files
-                                                ACTUAL_CMD=$(echo "$DIFF_CMD" | sed "s|\$LOCAL|\"$HEAD_FILE\"|g" | sed "s|\$REMOTE|\"$TIMELINE_FILE\"|g")
-                                                echo "Running: $ACTUAL_CMD"
-                                                echo "Files before launching:"
-                                                ls -la "$HEAD_FILE" "$TIMELINE_FILE"
-                                                echo "File contents preview:"
-                                                echo "=== HEAD file (first 3 lines) ==="
-                                                head -3 "$HEAD_FILE"
-                                                echo "=== TIMELINE file (first 3 lines) ==="
-                                                head -3 "$TIMELINE_FILE"
-                                                echo "========================="
-                                                
-                                                eval "$ACTUAL_CMD" &
-                                                CURSOR_PID=$!
-                                                echo "Diff tool launched with PID $CURSOR_PID, keeping files alive..."
-                                                echo "Temp directory: $TEMP_DIR"
-                                                echo "Press Enter after you close the diff tool to cleanup..."
-                                                read -p ""
-                                            else
-                                                echo "⚠️  No diff command configured for $DIFF_TOOL"
-                                                echo "Files available at:"
-                                                echo "  Current: $HEAD_FILE"
-                                                echo "  Timeline: $TIMELINE_FILE"
-                                            fi
-                                            
-                                            # Clean up
-                                            rm -rf "$TEMP_DIR"
-                                            echo ""
-                                            echo "Select another file or 'q' to go back:"
-                                        else
-                                            echo "Invalid choice. Enter 1-${#file_array[@]}, 'a' for all, or 'q' to go back."
-                                        fi
-                                    done
-                                else
-                                    echo "No changed files found."
-                                fi
-                                ;;
-                            "vscode"|"code")
-                                # VS Code: use standard difftool
-                                echo "Opening files in VS Code (one by one)..."
-                                echo "$changed_files" | while IFS= read -r file; do
-                                    echo "📄 Opening: $file"
-                                    git difftool --no-prompt HEAD "$BRANCH" -- "$file"
-                                done
-                                ;;
-                            "zed")
-                                # Zed: open files sequentially
-                                echo "Opening files in Zed (one by one)..."
-                                echo "$changed_files" | while IFS= read -r file; do
-                                    echo "📄 Opening: $file"
-                                    git difftool --no-prompt HEAD "$BRANCH" -- "$file"
-                                done
-                                ;;
-                            "meld")
-                                # Meld: supports directory diff
-                                echo "Opening directory diff in Meld..."
-                                git difftool --dir-diff --no-prompt HEAD "$BRANCH"
-                                ;;
-                            "vimdiff"|"nvim"|"vim")
-                                # Vim: open files sequentially (vim doesn't handle multiple diffs well)
-                                echo "Opening files in Vim diff (one by one)..."
-                                echo "$changed_files" | while IFS= read -r file; do
-                                    echo "📄 Opening: $file (press :qa to exit and continue)"
-                                    git difftool --no-prompt HEAD "$BRANCH" -- "$file"
-                                done
-                                ;;
-                            "opendiff"|"FileMerge")
-                                # FileMerge (Mac): open files sequentially
-                                echo "Opening files in FileMerge (one by one)..."
+                                # For Cursor, use git difftool with each file
                                 echo "$changed_files" | while IFS= read -r file; do
                                     echo "📄 Opening: $file"
                                     git difftool --no-prompt HEAD "$BRANCH" -- "$file"
                                 done
                                 ;;
                             *)
-                                # Unknown diff tool: open files sequentially
-                                echo "Opening files in $DIFF_TOOL (one by one)..."
-                                echo "$changed_files" | while IFS= read -r file; do
-                                    echo "📄 Opening: $file"
-                                    git difftool --no-prompt HEAD "$BRANCH" -- "$file"
-                                done
+                                # Default: use standard git difftool
+                                git difftool --no-prompt HEAD "$BRANCH"
                                 ;;
                         esac
                     else
-                        echo "No changed files found."
+                        # No difftool configured, show text diff
+                        git diff HEAD "$BRANCH"
                     fi
-                else
-                    # Fallback to git diff with pager
-                    git diff HEAD "$BRANCH" | ${PAGER:-less -R}
                 fi
-                
                 echo ""
-                echo "Diff tool closed. Select another timeline or press Enter to exit."
             done
             ;;
-        "search")
-            # Search functionality
+        "travel")
+            # Interactive timeline travel with resume input box UI
             CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
             CURRENT_HEAD=$(git rev-parse HEAD 2>/dev/null)
             
-            # Check for pattern argument
-            if [ -n "$2" ]; then
-                # Pattern provided as argument
-                PATTERN="$2"
-            else
-                # Direct search prompt
-                read -p "🔍 Enter search query: " PATTERN
-                if [ -z "$PATTERN" ]; then
-                    echo "No search query provided."
-                    exit 1
-                fi
-            fi
+            # Get all timeline branches
+            ALL_TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null | grep -v '/backup-'))
             
-            # Default to searching both content and filenames
-            SEARCH_CONTENT=true
-            SEARCH_FILENAMES=true
-            
-            
-            # Get all timeline branches sorted by date (newest first) and filter out those identical to HEAD
-            ALL_TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/*" 2>/dev/null))
-            TIMELINES=()
-            
-            # Filter out timelines that are identical to HEAD
-            for timeline in "${ALL_TIMELINES[@]}"; do
-                if [ -n "$(git diff --name-only HEAD "$timeline" 2>/dev/null)" ]; then
-                    TIMELINES+=("$timeline")
-                fi
-            done
-            
-            # If still no timelines found, try a different approach
-            if [ ${#TIMELINES[@]} -eq 0 ] && [ ${#ALL_TIMELINES[@]} -eq 0 ]; then
-                ALL_TIMELINES=($(git branch --list "timelines/$CURRENT_BRANCH/*" 2>/dev/null | sed 's/^[* ]*//' | sort -r))
-                for timeline in "${ALL_TIMELINES[@]}"; do
-                    if [ -n "$(git diff --name-only HEAD "$timeline" 2>/dev/null)" ]; then
-                        TIMELINES+=("$timeline")
-                    fi
-                done
-            fi
-            
-            if [ ${#TIMELINES[@]} -eq 0 ]; then
-                echo "No timeline timelines with changes found for branch '$CURRENT_BRANCH'"
-                echo "Debug: Looking for timelines/$CURRENT_BRANCH/*"
-                echo "Available timelines:"
-                git branch --list "timelines/*" | head -5
+            if [ ${#ALL_TIMELINES[@]} -eq 0 ]; then
+                echo "No timelines found for branch '$CURRENT_BRANCH'."
                 exit 0
             fi
             
-            # Perform search
-            echo "Searching for '$PATTERN' in ${#TIMELINES[@]} timelines..."
+            echo "🚀 Timeline Travel"
+            echo "================="
             echo ""
             
-            FOUND_ANY=false
-            SEARCH_TIMELINES=("${TIMELINES[@]}")
-                
-                # Search in selected timeline(s)
-                for BRANCH in "${SEARCH_TIMELINES[@]}"; do
-                # Get timeline index for display
-                for idx in "${!TIMELINES[@]}"; do
-                    if [ "${TIMELINES[$idx]}" = "$BRANCH" ]; then
-                        # Display index is same as array index (0 = oldest)
-                        TIMELINE_INDEX=$idx
-                        break
-                    fi
-                done
-                
-                # Get timeline info
-                SUBJECT=$(git log -1 --pretty=format:"%s" "$BRANCH" 2>/dev/null)
-                timeline_info=$(echo "$SUBJECT" | sed 's/ - [0-9]* files$//')
-                
-                # Search based on user selection
-                CONTENT_MATCHES=""
-                FILENAME_MATCHES=""
-                CHANGED_MATCHES=""
-                
-                if [ "$SEARCH_CONTENT" = true ]; then
-                    # Only search in files that are different from HEAD
-                    CHANGED_FILES=$(git diff --name-only HEAD "$BRANCH" 2>/dev/null)
-                    if [ -n "$CHANGED_FILES" ]; then
-                        CONTENT_MATCHES=""
-                        while IFS= read -r file; do
-                            # Check if this file contains the pattern
-                            if git grep -q "$PATTERN" "$BRANCH" -- "$file" 2>/dev/null; then
-                                CONTENT_MATCHES="${CONTENT_MATCHES}${file}"$'\n'
-                            fi
-                        done <<< "$CHANGED_FILES"
-                    fi
-                fi
-                
-                if [ "$SEARCH_FILENAMES" = true ]; then
-                    # Only search in files that are different from HEAD
-                    FILENAME_MATCHES=$(git diff --name-only HEAD "$BRANCH" 2>/dev/null | grep -i "$PATTERN" 2>/dev/null || echo "")
-                fi
-                
-                if [ "$SEARCH_CHANGED_ONLY" = true ]; then
-                    # Search only in changed lines (additions and deletions)
-                    DIFF_OUTPUT=$(git diff HEAD "$BRANCH" 2>/dev/null | grep -E "^[+-].*$PATTERN" | grep -v '^+++\|^---' || true)
-                    if [ -n "$DIFF_OUTPUT" ]; then
-                        CHANGED_MATCHES="$DIFF_OUTPUT"
-                    fi
-                fi
-                
-                # Display results if any matches found
-                if [ -n "$CONTENT_MATCHES" ] || [ -n "$FILENAME_MATCHES" ] || [ -n "$CHANGED_MATCHES" ]; then
-                    if [ "$FOUND_ANY" = false ]; then
-                        FOUND_ANY=true
-                    fi
-                    
-                    echo "📍 $timeline_info"
-                    
-                    if [ -n "$CHANGED_MATCHES" ]; then
-                        echo "   Changed lines matching '$PATTERN':"
-                        echo "$CHANGED_MATCHES" | head -20 | while IFS= read -r line; do
-                            echo "      $line"
-                        done
-                    fi
-                    
-                    if [ -n "$CONTENT_MATCHES" ]; then
-                        echo "   Content matches:"
-                        while IFS= read -r file; do
-                            if [ -n "$file" ]; then
-                                echo "      📄 $file:"
-                                # Show all matching lines in this file
-                                git grep -n "$PATTERN" "$BRANCH" -- "$file" 2>/dev/null | while IFS= read -r match; do
-                                    # Extract line number and match content
-                                    LINE_INFO=$(echo "$match" | sed "s|^$BRANCH:$file:||")
-                                    # Format as "line 123: content"
-                                    LINE_NUM=$(echo "$LINE_INFO" | cut -d: -f1)
-                                    LINE_CONTENT=$(echo "$LINE_INFO" | cut -d: -f2-)
-                                    echo "         line $LINE_NUM: $LINE_CONTENT" | cut -c1-80
-                                done | head -5  # Limit to 5 matches per file
-                            fi
-                        done <<< "$CONTENT_MATCHES"
-                    fi
-                    
-                    if [ -n "$FILENAME_MATCHES" ]; then
-                        echo "   Filename matches:"
-                        while IFS= read -r file; do
-                            if [ -n "$file" ]; then
-                                echo "      $file"
-                            fi
-                        done <<< "$FILENAME_MATCHES"
-                    fi
-                    
-                    echo ""
-                fi
+            # Display timelines with index numbers (newest first)
+            for ((i=0; i<${#ALL_TIMELINES[@]}; i++)); do
+                BRANCH="${ALL_TIMELINES[$i]}"
+                commit_time=$(git log -1 --pretty=format:"%cr" "$BRANCH" 2>/dev/null)
+                commit_msg=$(git log -1 --pretty=format:"%s" "$BRANCH" 2>/dev/null | head -c 60)
+                printf "  %2d) %-15s %s\n" "$i" "($commit_time)" "$commit_msg"
             done
+            echo ""
             
-            if [ "$FOUND_ANY" = false ]; then
-                echo "No matches found for '$PATTERN' in any timeline"
-            else
-                echo "💡 Use 'timeline travel' to go to a specific timeline"
-            fi
-            
-            exit 0
-            ;;
-        "travel")
-            # Check if a commit hash was provided as argument
-            if [ $# -eq 2 ] && [ -n "$2" ]; then
-                # Direct travel to specific commit
-                COMMIT_HASH="$2"
-                
-                # Validate it's a valid commit
-                if ! git rev-parse --verify "$COMMIT_HASH" >/dev/null 2>&1; then
-                    echo "❌ Invalid commit hash: $COMMIT_HASH"
-                    exit 1
-                fi
-                
-                echo "🚀 Traveling directly to commit: $COMMIT_HASH"
-                echo ""
-                
-                # Create backup timeline before making changes
-                CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
-                BACKUP_MSG="Backup before travel to $COMMIT_HASH"
-                ./timeline save >/dev/null 2>&1
-                
-                # Restore to the specified commit
-                echo "📍 Restoring working directory to commit $COMMIT_HASH..."
-                git restore --source="$COMMIT_HASH" --worktree . 2>/dev/null || {
-                    # Fallback for older git versions
-                    git checkout "$COMMIT_HASH" -- . 2>/dev/null
-                }
-                
-                echo "✅ Successfully traveled to commit $COMMIT_HASH"
-                echo ""
-                echo "To return to your previous state, use: ./timeline travel"
-                exit 0
-            fi
-            
-            # Get current branch name
-            CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
-            CURRENT_HEAD=$(git rev-parse HEAD 2>/dev/null || exit 0)
-            
-            # Outer loop for timeline selection
+            # Interactive travel selection
             while true; do
-                # Display timeline using shared function
-                if ! display_timeline "$CURRENT_BRANCH" "$CURRENT_HEAD"; then
-                    exit 0
-                fi
+                read -p "Select timeline number to travel to (or press Enter to cancel): " TIMELINE_NUM
                 
-                echo ""
-                
-                # Always prompt for selection (no arguments provided)
-                read -p "Select timeline number to travel to (0-$((${#TIMELINES[@]} - 1)), or press Enter to exit): " SELECTION
-                
-                # Handle quit - accept empty input
-                if [ -z "$SELECTION" ]; then
-                    echo "Exiting travel mode."
-                    exit 0
-                fi
-                
-                # Check if argument is a number (timeline) or commit ID
-                if [[ "$SELECTION" =~ ^[0-9]+$ ]]; then
-                    # Validate number is in range
-                    if [ "$SELECTION" -lt 0 ] || [ "$SELECTION" -ge ${#TIMELINES[@]} ]; then
-                        echo "Invalid selection. Please choose 0-$((${#TIMELINES[@]} - 1))"
-                        echo ""
-                        continue
-                    fi
-                    
-                    # Convert display index to array index
-                    # Display: 0=oldest, highest=newest
-                    # Array: 0=newest, highest=oldest  
-                    ARRAY_INDEX=$((${#TIMELINES[@]} - 1 - SELECTION))
-                    TIMELINE_BRANCH="${TIMELINES[$ARRAY_INDEX]}"
-                
-                # Show preview of what will change
-                echo ""
-                echo "📋 Preview of changes when traveling to this timeline:"
-                echo "───────────────────────────────────────────────────────"
-                
-                # Use shared function to display changes
-                display_timeline_changes "$TIMELINE_BRANCH" "HEAD"
-                
-                # Show summary stats
-                STATS=$(git diff --shortstat HEAD "$TIMELINE_BRANCH" 2>/dev/null)
-                if [ -n "$STATS" ]; then
-                    echo ""
-                    echo "   Summary: $STATS"
-                fi
-                echo "───────────────────────────────────────────────────────"
-                
-                # Get the timeline commit SHA
-                TIMELINE_SHA=$(git rev-parse "$TIMELINE_BRANCH")
-                
-                # Inner loop for confirmation
-                while true; do
-                    # Option 1: Full restore - completely replace working directory with timeline
-                    # This is destructive but exact
-                    echo ""
-                    read -p "⚠️  Travel to this timeline? (y to confirm, Enter to go back): " -n 1 -r
-                    echo
-                    
-                    if [ -z "$REPLY" ]; then
-                        # Enter pressed - go back to timeline selection
-                        echo ""
-                        break
-                    elif [[ $REPLY =~ ^[Yy]$ ]]; then
-                    # Check if there are any changes to backup
-                    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-                        # Save current work as a backup timeline first
-                        echo "📸 Creating backup timeline before time travel..."
-                        BACKUP_TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
-                        BACKUP_MSG="timeline-backup: before-travel@$BACKUP_TIMESTAMP"
-                        
-                        # Create backup using same plumbing approach
-                        export GIT_INDEX_FILE=$(mktemp)
-                        git read-tree HEAD >/dev/null 2>&1
-                        git add --all >/dev/null 2>&1
-                        BACKUP_TREE=$(git write-tree)
-                        BACKUP_COMMIT=$(echo "$BACKUP_MSG" | git commit-tree $BACKUP_TREE -p HEAD)
-                        git update-ref "refs/heads/timelines/$CURRENT_BRANCH/backup-$BACKUP_TIMESTAMP" $BACKUP_COMMIT >/dev/null 2>&1
-                        rm -f $GIT_INDEX_FILE
-                        unset GIT_INDEX_FILE
-                        
-                        echo "✅ Backup created: timelines/$CURRENT_BRANCH/backup-$BACKUP_TIMESTAMP"
-                    else
-                        echo "ℹ️  No changes to backup (working directory is clean)"
-                    fi
-                    
-                    # Now restore from timeline to working directory only (preserve staging area)
-                    # Use git restore with --worktree flag (Git 2.23+) or fallback to checkout
-                    if git restore --help >/dev/null 2>&1; then
-                        # Modern git with restore command
-                        git restore --source="$TIMELINE_BRANCH" --worktree . >/dev/null 2>&1
-                    else
-                        # Fallback: checkout to temp location and copy
-                        TEMP_DIR=$(mktemp -d)
-                        git --work-tree="$TEMP_DIR" checkout "$TIMELINE_BRANCH" -- . >/dev/null 2>&1
-                        cp -r "$TEMP_DIR"/* . 2>/dev/null || true
-                        rm -rf "$TEMP_DIR"
-                    fi
-                    
-                    echo "✅ Traveled to timeline #$SELECTION (unstaged changes)"
-                    echo "💡 Your staged changes are preserved"
-                    echo "💡 Use 'git status' to see all changes"
-                    echo "💡 Use 'timeline travel' to see backup timeline"
-                    
-                    # Exit after successful travel
-                    exit 0
-                    else
-                        # User didn't confirm
-                        echo "Travel cancelled."
-                        break
-                    fi
-                done  # End inner confirmation loop
-                
-            else
-                # Handle commit travel by commit ID
-                if ! git rev-parse --verify "$SELECTION" >/dev/null 2>&1; then
-                    echo "Error: '$SELECTION' is not a valid timeline number or commit ID"
-                    exit 1
-                fi
-                
-                echo "🔄 Traveling to commit: $SELECTION"
-                
-                # Confirm before resetting to commit
-                read -p "This will reset your working directory to commit $SELECTION. Continue? (y/N): " -n 1 -r
-                echo
-                if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                if [ -z "$TIMELINE_NUM" ]; then
                     echo "Cancelled."
                     exit 0
                 fi
                 
-                git reset --hard "$SELECTION"
-                echo "✅ Reset to commit $SELECTION"
-                echo "💡 Use 'git status' to see the current state"
+                if [ "$TIMELINE_NUM" -lt 0 ] || [ "$TIMELINE_NUM" -ge "${#ALL_TIMELINES[@]}" ] 2>/dev/null; then
+                    echo "Invalid selection. Please choose 0-$((${#ALL_TIMELINES[@]} - 1))"
+                    echo ""
+                    continue
+                fi
+                
+                SELECTED_BRANCH="${ALL_TIMELINES[$TIMELINE_NUM]}"
+                
+                # Show what would change
+                echo ""
+                echo "🔍 Changes that would be applied:"
+                echo "================================="
+                display_timeline_changes "$SELECTED_BRANCH" HEAD
+                echo ""
+                
+                # Get commit hash for the travel command
+                COMMIT_HASH=$(git rev-parse "$SELECTED_BRANCH" 2>/dev/null)
+                SHORT_HASH=$(git rev-parse --short "$SELECTED_BRANCH" 2>/dev/null)
+                
+                # Show resume command in input box style (reusing the UI pattern)
+                echo "📋 Resume Command:"
+                echo "=================="
+                echo ""
+                echo "┌─────────────────────────────────────────────────────────────┐"
+                echo "│ timeline travel $SHORT_HASH                                │"
+                echo "│                                                             │"
+                echo "│ [Copy] Copy to clipboard                                    │"
+                echo "└─────────────────────────────────────────────────────────────┘"
+                echo ""
+                
+                # Confirm travel
+                read -p "Proceed with time travel? (y/N): " CONFIRM
+                
+                if [[ $CONFIRM =~ ^[Yy]$ ]]; then
+                    # Create backup timeline first
+                    BACKUP_BRANCH="timelines/$CURRENT_BRANCH/backup-$(date +%s)"
+                    git branch "$BACKUP_BRANCH" HEAD 2>/dev/null || true
+                    
+                    # Perform time travel
+                    echo ""
+                    echo "🌟 Creating backup at: $BACKUP_BRANCH"
+                    echo "🚀 Traveling to timeline: $SELECTED_BRANCH"
+                    
+                    # Use git restore if available (Git 2.23+), otherwise fallback
+                    if git restore --help >/dev/null 2>&1; then
+                        git restore --source="$SELECTED_BRANCH" --worktree .
+                    else
+                        git checkout "$SELECTED_BRANCH" -- .
+                    fi
+                    
+                    echo "✅ Time travel complete!"
+                    echo ""
+                    echo "📍 You are now at timeline: $SELECTED_BRANCH"
+                    echo "🔄 To return to latest: git restore --source=HEAD --worktree ."
+                    echo "💾 Backup available at: $BACKUP_BRANCH"
+                    
+                    break
+                else
+                    echo "Cancelled."
+                    break
+                fi
+            done
+            ;;
+        "search")
+            # Enhanced search across timelines, commit messages, and transcripts
+            if [ -z "$2" ]; then
+                echo "Usage: timeline search <pattern>"
+                echo "  Searches across:"
+                echo "    • File content and names in timelines"
+                echo "    • Commit messages"
+                echo "    • Session transcripts (requires jq)"
+                echo ""
+                echo "Examples:"
+                echo "  timeline search 'auth'       # Find auth-related changes"
+                echo "  timeline search 'bug'        # Find bug fixes"
+                echo "  timeline search 'test.js'    # Find specific files"
+                exit 1
+            fi
+            
+            PATTERN="$2"
+            CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
+            
+            echo "🔍 Enhanced Search for '$PATTERN'"
+            echo "================================"
+            echo ""
+            
+            # Get all timeline branches
+            TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/*" 2>/dev/null))
+            
+            if [ ${#TIMELINES[@]} -eq 0 ]; then
+                echo "No timelines found."
                 exit 0
             fi
-            done  # End outer while loop for timeline selection
+            
+            FOUND_COUNT=0
+            CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+            
+            echo "📊 Search Results:"
+            echo "=================="
+            echo ""
+            
+            for timeline in "${TIMELINES[@]}"; do
+                # Get timeline info
+                commit_time=$(git log -1 --pretty=format:"%cr" "$timeline" 2>/dev/null)
+                commit_msg=$(git log -1 --pretty=format:"%s" "$timeline" 2>/dev/null)
+                short_hash=$(git rev-parse --short "$timeline" 2>/dev/null)
+                
+                # Search in file content
+                CONTENT_MATCHES=$(git grep -l "$PATTERN" "$timeline" 2>/dev/null || true)
+                
+                # Search in filenames
+                FILE_MATCHES=$(git ls-tree -r --name-only "$timeline" 2>/dev/null | grep "$PATTERN" 2>/dev/null || true)
+                
+                # Search in commit message
+                COMMIT_MATCH=""
+                if echo "$commit_msg" | grep -qi "$PATTERN" 2>/dev/null; then
+                    COMMIT_MATCH="yes"
+                fi
+                
+                # Search in session transcript (if linked)
+                TRANSCRIPT_MATCH=""
+                commit_hash=$(git rev-parse "$timeline" 2>/dev/null)
+                if [ -n "$commit_hash" ]; then
+                    session_id=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null | grep "Session-Id:" | cut -d' ' -f2- | head -1)
+                    if [ -n "$session_id" ]; then
+                        session_file=$(find "$CLAUDE_DIR/projects" -name "$session_id.jsonl" 2>/dev/null | head -1)
+                        
+                        if [ -f "$session_file" ] && command -v jq >/dev/null 2>&1; then
+                            if grep -q "$PATTERN" "$session_file" 2>/dev/null; then
+                                TRANSCRIPT_MATCH="yes"
+                            fi
+                        fi
+                    fi
+                fi
+                
+                # Display results if any matches found
+                if [ -n "$CONTENT_MATCHES" ] || [ -n "$FILE_MATCHES" ] || [ -n "$COMMIT_MATCH" ] || [ -n "$TRANSCRIPT_MATCH" ]; then
+                    echo "⭐ Timeline: $timeline"
+                    echo "   🕒 $commit_time • 🏷️  $short_hash"
+                    echo "   💬 $commit_msg"
+                    echo ""
+                    
+                    # Show commit message match
+                    if [ -n "$COMMIT_MATCH" ]; then
+                        echo "   ✅ Found in commit message"
+                    fi
+                    
+                    # Show transcript match
+                    if [ -n "$TRANSCRIPT_MATCH" ]; then
+                        echo "   ✅ Found in session transcript"
+                        if [ -f "$session_file" ] && command -v jq >/dev/null 2>&1; then
+                            echo "      Recent context:"
+                            grep "$PATTERN" "$session_file" | head -2 | while read -r line; do
+                                msg_role=$(echo "$line" | jq -r '.role' 2>/dev/null)
+                                msg_content=$(echo "$line" | jq -r '.content' 2>/dev/null | head -c 100)
+                                echo "      • $msg_role: $msg_content..."
+                            done
+                        fi
+                    fi
+                    
+                    # Show file content matches
+                    if [ -n "$CONTENT_MATCHES" ]; then
+                        echo "   ✅ Found in file content:"
+                        echo "$CONTENT_MATCHES" | while read -r file; do
+                            echo "      📄 $file"
+                            git grep -n "$PATTERN" "$timeline" -- "$file" 2>/dev/null | head -2 | sed 's/^/         /'
+                        done
+                    fi
+                    
+                    # Show filename matches
+                    if [ -n "$FILE_MATCHES" ]; then
+                        echo "   ✅ Found in filenames:"
+                        echo "$FILE_MATCHES" | head -3 | sed 's/^/      📁 /'
+                    fi
+                    
+                    echo ""
+                    echo "   🚀 Travel command: timeline travel $short_hash"
+                    echo ""
+                    echo "   ────────────────────────────────────────────────"
+                    echo ""
+                    FOUND_COUNT=$((FOUND_COUNT + 1))
+                fi
+            done
+            
+            if [ $FOUND_COUNT -eq 0 ]; then
+                echo "No matches found."
+            else
+                echo "Found matches in $FOUND_COUNT timeline(s)."
+            fi
             ;;
-        *)
-            echo "Usage:"
-            echo "  timeline save             - Create a timeline manually"
-            echo "  timeline travel           - Show timelines and travel interactively"
-            echo "  timeline view             - Quick view all timelines with changes"
-            echo "  timeline browse           - Browse files in a specific timeline"
-            echo "  timeline search [pattern] - Search for text across timelines"
-            echo "  timeline delete           - Delete timelines interactively"
-            echo "  timeline cleanup          - Clean up timelines for deleted branches"
-            echo "  timeline install          - Install hook to Claude Code"
-            echo "  timeline uninstall        - Remove hook from Claude Code"
-            exit 1
+        "delete")
+            # Interactive timeline deletion
+            CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
+            CURRENT_HEAD=$(git rev-parse HEAD 2>/dev/null)
+            
+            # Get all timeline branches
+            ALL_TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/*" 2>/dev/null))
+            
+            if [ ${#ALL_TIMELINES[@]} -eq 0 ]; then
+                echo "No timelines found."
+                exit 0
+            fi
+            
+            echo "🗑️ Timeline Deletion"
+            echo "===================="
+            
+            # Display timelines
+            for ((i=0; i<${#ALL_TIMELINES[@]}; i++)); do
+                BRANCH="${ALL_TIMELINES[$i]}"
+                commit_time=$(git log -1 --pretty=format:"%cr" "$BRANCH" 2>/dev/null)
+                commit_msg=$(git log -1 --pretty=format:"%s" "$BRANCH" 2>/dev/null | head -c 60)
+                printf "  %2d) %-15s %s\n" "$i" "($commit_time)" "$commit_msg"
+            done
+            echo ""
+            
+            read -p "Select timeline to delete (or press Enter to cancel): " TIMELINE_NUM
+            
+            if [ -z "$TIMELINE_NUM" ]; then
+                echo "Cancelled."
+                exit 0
+            fi
+            
+            if [ "$TIMELINE_NUM" -lt 0 ] || [ "$TIMELINE_NUM" -ge "${#ALL_TIMELINES[@]}" ] 2>/dev/null; then
+                echo "Invalid selection."
+                exit 1
+            fi
+            
+            BRANCH="${ALL_TIMELINES[$TIMELINE_NUM]}"
+            
+            # Confirm deletion
+            echo ""
+            echo "⚠️  You are about to delete timeline: $BRANCH"
+            read -p "Are you sure? (yes/no): " CONFIRM
+            
+            if [ "$CONFIRM" = "yes" ]; then
+                git branch -D "$BRANCH"
+                echo "✅ Deleted timeline: $BRANCH"
+            else
+                echo "Cancelled."
+            fi
+            ;;
+        "cleanup")
+            # Clean up timelines for deleted branches
+            echo "🧹 Cleaning up timelines for deleted branches..."
+            echo ""
+            
+            # Get all timeline branch prefixes
+            TIMELINE_PREFIXES=($(git for-each-ref --format='%(refname:short)' 'refs/heads/timelines/*' 2>/dev/null | sed 's|/.*||' | sort -u | sed 's|timelines/||'))
+            
+            CLEANED_COUNT=0
+            
+            for branch_name in "${TIMELINE_PREFIXES[@]}"; do
+                # Check if the actual branch still exists
+                if ! git show-ref --verify --quiet "refs/heads/$branch_name" 2>/dev/null; then
+                    echo "Found orphaned timelines for deleted branch: $branch_name"
+                    
+                    # Get all timelines for this branch
+                    ORPHAN_TIMELINES=($(git for-each-ref --format='%(refname:short)' "refs/heads/timelines/$branch_name/*" 2>/dev/null))
+                    
+                    if [ ${#ORPHAN_TIMELINES[@]} -gt 0 ]; then
+                        echo "  Removing ${#ORPHAN_TIMELINES[@]} timeline(s)..."
+                        for timeline in "${ORPHAN_TIMELINES[@]}"; do
+                            git branch -D "$timeline" 2>/dev/null
+                            CLEANED_COUNT=$((CLEANED_COUNT + 1))
+                        done
+                    fi
+                fi
+            done
+            
+            if [ $CLEANED_COUNT -eq 0 ]; then
+                echo "No orphaned timelines found."
+            else
+                echo ""
+                echo "✅ Cleaned up $CLEANED_COUNT orphaned timeline(s)."
+            fi
+            ;;
+        "install"|"uninstall")
+            # These are handled at the beginning of the script
             ;;
     esac
 else
@@ -1732,7 +1915,7 @@ else
     echo "Usage:"
     echo "  timeline save             - Create a timeline manually"
     echo "  timeline travel           - Show timelines and travel interactively"
-    echo "  timeline view             - Quick view all timelines with changes"
+    echo "  timeline view             - Visual HTML view of all timelines"
     echo "  timeline browse           - Browse files in a specific timeline"
     echo "  timeline search [pattern] - Search for text across timelines"
     echo "  timeline delete           - Delete timelines interactively"
@@ -1748,8 +1931,43 @@ if ! git rev-parse --git-dir >/dev/null 2>&1; then
     exit 0
 fi
 
+# Debug logging
+DEBUG_ENABLED_FILE="/tmp/timeline_debug_enabled"
+
+if [ -f "$DEBUG_ENABLED_FILE" ] || [ "$1" = "--debug" ]; then
+    # Read debug log path from file, or use default
+    if [ -f "$DEBUG_ENABLED_FILE" ] && [ -s "$DEBUG_ENABLED_FILE" ]; then
+        DEBUG_LOG=$(cat "$DEBUG_ENABLED_FILE")
+    else
+        DEBUG_LOG="/tmp/timeline-debug.log"
+    fi
+    exec 3>> "$DEBUG_LOG"
+    echo "=== Timeline Debug Session $(date) ===" >&3
+    echo "Command: $0 $*" >&3
+    echo "PWD: $(pwd)" >&3
+    echo "Environment variables:" >&3
+    env | grep -E "(CLAUDE|SESSION|TOOL|HOOK)" | sort >&3
+    echo "Stdin available: $([ ! -t 0 ] && echo 'yes' || echo 'no')" >&3
+    if [ ! -t 0 ]; then
+        echo "Stdin data (full JSON):" >&3
+        cat > /tmp/timeline-stdin.log
+        # Pretty print JSON if it's valid JSON
+        if command -v jq >/dev/null 2>&1 && jq empty < /tmp/timeline-stdin.log 2>/dev/null; then
+            jq '.' /tmp/timeline-stdin.log >&3
+        else
+            cat /tmp/timeline-stdin.log >&3
+        fi
+    fi
+    echo "Arguments: $@" >&3
+    echo "========================" >&3
+fi
+
 # Get current branch and last timeline
-CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
+CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "main")
+# Ensure branch name is not empty (fallback to main)
+if [ -z "$CURRENT_BRANCH" ]; then
+    CURRENT_BRANCH="main"
+fi
 LAST_TIMELINE=$(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null | grep -v '/backup-' | head -1)
 
 # Always check against last timeline if it exists
@@ -1785,23 +2003,16 @@ else
     fi
 fi
 
-# Get current branch name and working directory info
-CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
-CURRENT_HEAD=$(git rev-parse HEAD 2>/dev/null) || exit 0
-SHORT_HEAD=$(git rev-parse --short HEAD)
-
 # Get the commit message of current HEAD
 COMMIT_MSG=$(git log -1 --pretty=format:"%s" HEAD)
+SHORT_HEAD=$(git rev-parse --short HEAD)
 
-# Find the next timeline number for this base commit
+# Find the next timeline number
 TIMELINE_NUM=0
 EXISTING_TIMELINES=$(git branch --list "timelines/$CURRENT_BRANCH/+*" 2>/dev/null | sed 's/^[\* ]*//')
 if [ -n "$EXISTING_TIMELINES" ]; then
-    # Look for timelines with same base commit
     for branch in $EXISTING_TIMELINES; do
-        # Check if this timeline is based on current HEAD
         if git log -1 --pretty=format:"%s" "$branch" 2>/dev/null | grep -q "@$SHORT_HEAD"; then
-            # Extract the number from branch name like "+0", "+1", etc
             num=$(echo "$branch" | sed -n "s|timelines/$CURRENT_BRANCH/+\([0-9]*\).*|\1|p")
             if [ -n "$num" ] && [ "$num" -ge "$TIMELINE_NUM" ]; then
                 TIMELINE_NUM=$((num + 1))
@@ -1810,170 +2021,69 @@ if [ -n "$EXISTING_TIMELINES" ]; then
     done
 fi
 
-# Create timeline branch name with +N format and commit message
-# Clean commit message to be branch-safe (remove special chars)
+# Create timeline branch name
 SAFE_MSG=$(echo "$COMMIT_MSG" | sed 's/[^a-zA-Z0-9._-]/_/g' | cut -c1-50)
 TIMELINE_BRANCH="timelines/$CURRENT_BRANCH/+${TIMELINE_NUM}_${SAFE_MSG}"
 
-# Create timeline using git plumbing commands (zero working directory impact)
-# This creates a real git commit without touching the working directory or index
-
-# Step 1: Create a temporary index to work with (doesn't affect the real index)
+# Create timeline using git plumbing commands
 export GIT_INDEX_FILE=$(mktemp)
 trap "rm -f $GIT_INDEX_FILE" EXIT
 
-# Step 2: Read current HEAD into our temporary index
 git read-tree HEAD >/dev/null 2>&1
-
-# Step 3: Update temporary index with current working tree state
-# This captures both staged and unstaged changes in their final form
 git add --all >/dev/null 2>&1
-
-# Step 4: Write the tree object from our temporary index
 TREE_SHA=$(git write-tree)
 
-# Step 5: Try to get conversation context for a meaningful commit message
-TIMELINE_MSG=""
-CONVERSATION_MSG=""
+TIMELINE_MSG="Timeline +$TIMELINE_NUM @$SHORT_HEAD: $COMMIT_MSG"
+COMMIT_SHA=$(echo "$TIMELINE_MSG" | git commit-tree $TREE_SHA -p HEAD)
+git update-ref "refs/heads/$TIMELINE_BRANCH" $COMMIT_SHA
 
-# Try to get the latest user request and assistant action from Claude session
-if command -v jq &> /dev/null; then
-    SESSION_FILE=$(get_current_claude_session_file)
-    if [ -f "$SESSION_FILE" ]; then
-        # Get the most recent user message (non-tool-result)
-        LAST_USER_MSG=$(tail -500 "$SESSION_FILE" | grep '"role":"user"' | grep -v tool_result | tail -1 | jq -r '
-            if .message.content | type == "string" then 
-                .message.content | gsub("\n"; " ") | .[0:100]
-            elif .message.content | type == "array" then
-                .message.content | map(select(.type == "text").text // empty) | join(" ") | .[0:100]
-            else
-                empty
-            end' 2>/dev/null | sed 's/[^a-zA-Z0-9 ._-]//g')
-        
-        # Get the most recent assistant action (tool use)
-        LAST_ASSISTANT_ACTION=$(tail -500 "$SESSION_FILE" | grep '"role":"assistant"' | tail -1 | jq -r '
-            if .message.content | type == "array" then
-                (.message.content[] | select(.type == "tool_use") | .name) // empty
-            else
-                empty
-            end' 2>/dev/null | head -1)
-        
-        # Build conversation-based message
-        if [ -n "$LAST_USER_MSG" ]; then
-            CONVERSATION_MSG="User: ${LAST_USER_MSG}"
-            if [ -n "$LAST_ASSISTANT_ACTION" ]; then
-                CONVERSATION_MSG="${CONVERSATION_MSG} → ${LAST_ASSISTANT_ACTION}"
-            fi
+# Try to detect and link Claude session ID
+SESSION_ID=""
+
+# Method 1: Check environment variables
+for var in CLAUDE_SESSION_ID SESSION_ID TOOL_SESSION_ID HOOK_SESSION_ID; do
+    if [ -n "${!var}" ]; then
+        SESSION_ID="${!var}"
+        [ -f "$DEBUG_ENABLED_FILE" ] && echo "Found session ID from env var $var: $SESSION_ID" >&3
+        break
+    fi
+done
+
+# Method 2: Check stdin data if available
+if [ -z "$SESSION_ID" ] && [ -f "/tmp/timeline-stdin.log" ]; then
+    # Look for session ID patterns in stdin
+    if grep -q -E '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' /tmp/timeline-stdin.log; then
+        SESSION_ID=$(grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' /tmp/timeline-stdin.log | head -1)
+        [ -f "$DEBUG_ENABLED_FILE" ] && echo "Found session ID from stdin: $SESSION_ID" >&3
+    fi
+fi
+
+# Method 3: Try to extract from current session files
+if [ -z "$SESSION_ID" ]; then
+    # Look for recently modified session files
+    CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    if [ -d "$CLAUDE_DIR/projects" ]; then
+        RECENT_SESSION=$(find "$CLAUDE_DIR/projects" -name "*.jsonl" -type f -exec stat -f "%m %N" {} \; 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
+        if [ -n "$RECENT_SESSION" ]; then
+            SESSION_ID=$(basename "$RECENT_SESSION" .jsonl)
+            [ -f "$DEBUG_ENABLED_FILE" ] && echo "Found session ID from recent file: $SESSION_ID" >&3
         fi
     fi
 fi
 
-# If we have conversation context, use it as primary message
-if [ -n "$CONVERSATION_MSG" ]; then
-    TIMELINE_MSG="$CONVERSATION_MSG"
+# Add session ID as git note if found
+if [ -n "$SESSION_ID" ]; then
+    echo "Session-Id: $SESSION_ID" | git notes --ref=timeline add -F - "$COMMIT_SHA" 2>/dev/null
+    [ -f "$DEBUG_ENABLED_FILE" ] && echo "Added session ID note: $SESSION_ID" >&3
 else
-    # Fallback to file change summary
-    file_status=$(git diff --name-status HEAD $TREE_SHA 2>/dev/null)
-    
-    if [ -n "$file_status" ]; then
-        # Get file counts for summary line
-        added_files=$(echo "$file_status" | grep '^A' | wc -l | tr -d ' ')
-        modified_files=$(echo "$file_status" | grep '^M' | wc -l | tr -d ' ')
-        removed_files=$(echo "$file_status" | grep '^D' | wc -l | tr -d ' ')
-        
-        # Get line stats
-        STATS=$(git diff --shortstat HEAD $TREE_SHA 2>/dev/null | sed 's/files\? changed/files/' || echo "")
-        ADDS=$(echo "$STATS" | grep -oE '[0-9]+ insertion' | grep -o '[0-9]*' | head -1)
-        DELS=$(echo "$STATS" | grep -oE '[0-9]+ deletion' | grep -o '[0-9]*' | head -1)
-        ADDS=${ADDS:-0}
-        DELS=${DELS:-0}
-        
-        # Use shared function to generate summary line
-        TIMELINE_MSG=$(generate_summary_line "$added_files" "$modified_files" "$removed_files" "$ADDS" "$DELS")
-    fi
+    [ -f "$DEBUG_ENABLED_FILE" ] && echo "No session ID found" >&3
 fi
 
-# Add detailed file breakdown below the main message
-file_status=$(git diff --name-status HEAD $TREE_SHA 2>/dev/null)
-
-if [ -n "$file_status" ]; then
-    # Add individual file lines (sorted by impact then alphabetically)
-    # Create temp file for sorting
-    temp_file=$(mktemp)
-    
-    while IFS= read -r line; do
-        if [ -n "$line" ]; then
-            status=$(echo "$line" | cut -f1)
-            filename=$(echo "$line" | cut -f2-)
-            
-            # Get line changes for this file
-            file_stats=$(git diff --stat HEAD $TREE_SHA -- "$filename" 2>/dev/null | tail -1)
-            file_adds=$(echo "$file_stats" | grep -oE '[0-9]+ \+' | grep -o '[0-9]*' || echo "0")
-            file_dels=$(echo "$file_stats" | grep -oE '[0-9]+ -' | grep -o '[0-9]*' || echo "0")
-            file_adds=${file_adds:-0}
-            file_dels=${file_dels:-0}
-            
-            # Create visual for this file
-            file_visual=""
-            if [ "$file_adds" -gt 0 ]; then
-                if [ "$file_adds" -lt 10 ]; then
-                    file_visual="${file_visual}$(printf -- '+%.0s' $(seq 1 $file_adds))"
-                else
-                    file_visual="${file_visual}+++"
-                fi
-            fi
-            if [ "$file_dels" -gt 0 ]; then
-                if [ "$file_dels" -lt 10 ]; then
-                    file_visual="${file_visual}$(printf -- '-%.0s' $(seq 1 $file_dels))"
-                else
-                    file_visual="${file_visual}---"
-                fi
-            fi
-            
-            # Convert status to symbol
-            case "$status" in
-                A) symbol="+" ;;
-                M) symbol="~" ;;
-                D) symbol="-" ;;
-                *) symbol="?" ;;
-            esac
-            
-            # Calculate impact for sorting (total lines changed)
-            impact=$((file_adds + file_dels))
-            
-            # Store for sorting: impact:filename:symbol:visual:adds:dels
-            printf "%05d:%s:%s:%s:%s:%s\n" "$impact" "$filename" "$symbol" "$file_visual" "$file_adds" "$file_dels" >> "$temp_file"
-        fi
-    done <<< "$file_status"
-    
-    # Sort by impact (descending) then filename (ascending) and build message
-    if [ -f "$temp_file" ]; then
-        # Read sorted file into TIMELINE_MSG
-        while IFS=: read -r impact filename symbol file_visual file_adds file_dels; do
-            TIMELINE_MSG="${TIMELINE_MSG}
-${symbol}${filename} ${file_visual} +${file_adds} -${file_dels} lines"
-        done < <(sort -rn -t: -k1,1 -k2,2 "$temp_file")
-        rm -f "$temp_file"
-    fi
-else
-    TIMELINE_MSG="No changes"
-fi
-
-# Step 6: Create the commit object (without updating any refs yet)
-TIMELINE_COMMIT=$(echo "$TIMELINE_MSG" | git commit-tree $TREE_SHA -p $CURRENT_HEAD)
-
-# Step 7: Create a branch reference for this timeline
-git update-ref "refs/heads/$TIMELINE_BRANCH" $TIMELINE_COMMIT >/dev/null 2>&1
-
-# Step 8: Add git notes with session information
-CURRENT_SESSION=$(get_current_claude_session)
-if [ -n "$CURRENT_SESSION" ]; then
-    # Add the note to the timeline commit using -m flag (stdin doesn't work properly)
-    git notes --ref=timeline add -m "Session-Id: $CURRENT_SESSION" "$TIMELINE_COMMIT" 2>/dev/null || true
-fi
-
-# Clean up temp index
 rm -f $GIT_INDEX_FILE
 unset GIT_INDEX_FILE
 
-# Silent completion - no output needed since this runs automatically via hooks
+# Clean up old timelines (keep only last 20)
+OLD_TIMELINES=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/" 2>/dev/null | tail -n +21))
+for old_timeline in "${OLD_TIMELINES[@]}"; do
+    git branch -D "$old_timeline" >/dev/null 2>&1
+done
