@@ -917,7 +917,7 @@ if [ $# -gt 0 ]; then
             done
             
             # Wait for all background jobs to complete with progress
-            echo -n "Waiting for parallel processing to complete..."
+            echo -n "Waiting for processing to complete..."
             wait
             echo " Done!"
             
@@ -1227,13 +1227,6 @@ EOF
                     echo "                        <!-- Accordion Content -->" >> "$HTML_FILE"
                     echo "                        <div x-show=\"activeSession === $session_idx\" x-cloak class=\"border-t border-gray-100\">" >> "$HTML_FILE"
                     echo "                            <div class=\"p-6\">" >> "$HTML_FILE"
-                    
-                    # Resume command box
-                    echo "                                <!-- Resume Command -->" >> "$HTML_FILE"
-                    echo "                                <div class=\"mb-6\">" >> "$HTML_FILE"
-                    echo "                                    <p class=\"text-xs text-gray-600 mb-2\">Resume this session:</p>" >> "$HTML_FILE"
-                    echo "                                    <div x-html=\"renderCopyInput('claude -r $session_id', 'Focus to select all')\"></div>" >> "$HTML_FILE"
-                    echo "                                </div>" >> "$HTML_FILE"
                     
                     # Stats for this session (always show)
                     if [ ${#SESSION_TIMELINES[@]} -gt 0 ]; then
