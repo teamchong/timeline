@@ -741,7 +741,19 @@ if [ $# -gt 0 ]; then
             
             echo "Found ${#SESSION_LIST[@]} session(s)"
             echo ""
-            echo "🔄 Generating timeline data..."
+            
+            # Pre-cache all timeline metadata for faster processing
+            echo -n "🔄 Caching timeline metadata..."
+            TIMELINE_CACHE=$(mktemp)
+            for timeline in "${ALL_TIMELINES[@]}"; do
+                commit_hash=$(git rev-parse "$timeline" 2>/dev/null)
+                if [ -n "$commit_hash" ]; then
+                    notes=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null || echo "")
+                    session_id=$(echo "$notes" | grep "^Session-Id:" | cut -d' ' -f2- | head -1)
+                    echo "$timeline|$commit_hash|$session_id" >> "$TIMELINE_CACHE"
+                fi
+            done
+            echo " Done! (${#ALL_TIMELINES[@]} timelines)"
             echo ""
             
             # Generate HTML output with dynamic rendering
@@ -817,23 +829,32 @@ if [ $# -gt 0 ]; then
                 echo "      modified: \"$(escape_js "$session_modified_datetime")\","
                 echo "      timelines: ["
                 
-                # Get timelines for this session
+                # Get timelines for this session from cache
                 local SESSION_TIMELINES=()
-                # Get all timelines from git directly in this subshell
-                local CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
-                local ALL_TIMELINES_LOCAL=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/*" 2>/dev/null))
-                for timeline in "${ALL_TIMELINES_LOCAL[@]}"; do
-                    commit_hash=$(git rev-parse "$timeline" 2>/dev/null)
-                    if [ -n "$commit_hash" ]; then
-                        notes=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null || true)
-                        if [ -n "$notes" ]; then
-                            sid=$(echo "$notes" | grep "^Session-Id:" | cut -d' ' -f2- | head -1)
-                            if [ "$sid" = "$session_id" ]; then
-                                SESSION_TIMELINES+=("$timeline")
+                if [ -f "$TIMELINE_CACHE" ]; then
+                    # Fast lookup from cache
+                    while IFS='|' read -r timeline commit_hash sid; do
+                        if [ "$sid" = "$session_id" ]; then
+                            SESSION_TIMELINES+=("$timeline")
+                        fi
+                    done < "$TIMELINE_CACHE"
+                else
+                    # Fallback if no cache
+                    local CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
+                    local ALL_TIMELINES_LOCAL=($(git for-each-ref --sort=-committerdate --format='%(refname:short)' "refs/heads/timelines/$CURRENT_BRANCH/*" 2>/dev/null))
+                    for timeline in "${ALL_TIMELINES_LOCAL[@]}"; do
+                        commit_hash=$(git rev-parse "$timeline" 2>/dev/null)
+                        if [ -n "$commit_hash" ]; then
+                            notes=$(git notes --ref=timeline show "$commit_hash" 2>/dev/null || true)
+                            if [ -n "$notes" ]; then
+                                sid=$(echo "$notes" | grep "^Session-Id:" | cut -d' ' -f2- | head -1)
+                                if [ "$sid" = "$session_id" ]; then
+                                    SESSION_TIMELINES+=("$timeline")
+                                fi
                             fi
                         fi
-                    fi
-                done
+                    done
+                fi
                 
                 # Add timeline data
                 for ((i=${#SESSION_TIMELINES[@]}-1; i>=0; i--)); do
@@ -899,27 +920,34 @@ if [ $# -gt 0 ]; then
             export -f escape_js
             
             # Process sessions in parallel
-            echo "Processing ${#SESSION_LIST[@]} sessions in parallel..."
-            echo ""
+            echo "Processing ${#SESSION_LIST[@]} sessions..."
+            
+            # Pass cache to subprocesses
+            export TIMELINE_CACHE
             
             # Start all parallel jobs
+            JOBS_STARTED=0
             for session_idx in "${!SESSION_LIST[@]}"; do
                 session_id="${SESSION_LIST[$session_idx]}"
                 output_file="$TEMP_DIR/session_${session_idx}.json"
                 
                 # Run session processing in background
                 process_session "$session_idx" "$session_id" "$output_file" &
+                JOBS_STARTED=$((JOBS_STARTED + 1))
                 
-                # Limit parallel jobs to avoid overwhelming the system (max 8)
+                # Limit parallel jobs (max 8)
                 while [ $(jobs -r | wc -l) -ge 8 ]; do
-                    sleep 0.1
+                    sleep 0.05
                 done
+                
+                printf "\r  Starting job %d/%d..." $JOBS_STARTED ${#SESSION_LIST[@]}
             done
             
-            # Wait for all background jobs to complete with progress
-            echo -n "Waiting for processing to complete..."
+            # Wait for all background jobs
+            printf "\r  Waiting for jobs to complete..."
             wait
-            echo " Done!"
+            printf "\r%*s\r" 50 ""
+            echo "✅ Processing complete!"
             
             # Combine results in order
             for session_idx in "${!SESSION_LIST[@]}"; do
