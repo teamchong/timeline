@@ -63,29 +63,54 @@ export async function save(): Promise<void> {
   const timestamp = new Date().toISOString();
   const message = `Timeline snapshot at ${timestamp}`;
   
-  // Create tree from current state
-  const tree = await git(['write-tree']);
+  // Create tree from current state including working directory changes
+  // We need to use a temporary index to capture ALL changes, not just staged ones
+  const tempIndex = `/tmp/timeline-index-${Date.now()}`;
   
-  // Create commit object
-  const commitHash = await git(['commit-tree', tree, '-p', currentCommit, '-m', message]);
-  
-  // Create timeline branch
-  const timelineNumber = Date.now();
-  const timelineName = `timelines/${branch}/+${timelineNumber}_snapshot`;
-  await git(['update-ref', `refs/heads/${timelineName}`, commitHash]);
-  
-  // Add metadata as git note  
-  const metadata = JSON.stringify({
-    sessionId,
-    timestamp,
-    branch,
-    tool: hookData?.tool,
-    files: hookData?.files,
-    projectPath: hookData?.projectPath || process.cwd()
-  });
-  await git(['notes', '--ref=timeline-metadata', 'add', '-f', '-m', metadata, commitHash]);
-  
-  console.log(`✅ Timeline created: ${timelineName}`);
+  try {
+    // Add all files (tracked and modified) to temporary index
+    process.env.GIT_INDEX_FILE = tempIndex;
+    
+    // First, read the current HEAD into our temporary index
+    await git(['read-tree', 'HEAD']);
+    
+    // Then add all changes from working directory
+    await git(['add', '-A']);
+    
+    // Create tree from the temporary index
+    const tree = await git(['write-tree']);
+    
+    // Create commit object
+    const commitHash = await git(['commit-tree', tree, '-p', currentCommit, '-m', message]);
+    
+    // Create timeline branch
+    const timelineNumber = Date.now();
+    const timelineName = `timelines/${branch}/+${timelineNumber}_snapshot`;
+    await git(['update-ref', `refs/heads/${timelineName}`, commitHash]);
+    
+    // Add metadata as git note  
+    const metadata = JSON.stringify({
+      sessionId,
+      timestamp,
+      branch,
+      tool: hookData?.tool,
+      files: hookData?.files,
+      projectPath: hookData?.projectPath || process.cwd()
+    });
+    await git(['notes', '--ref=timeline-metadata', 'add', '-f', '-m', metadata, commitHash]);
+    
+    console.log(`✅ Timeline created: ${timelineName}`);
+  } finally {
+    // Clean up: restore original index
+    delete process.env.GIT_INDEX_FILE;
+    
+    // Remove temporary index file
+    try {
+      await Bun.$`rm -f ${tempIndex}`.quiet();
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
 }
 
 // Install Claude Code hooks
