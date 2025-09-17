@@ -1264,32 +1264,6 @@ EOF
                     echo "                        <div x-show=\"activeSession === $session_idx\" x-cloak class=\"border-t border-gray-100\">" >> "$HTML_FILE"
                     echo "                            <div class=\"p-6\">" >> "$HTML_FILE"
                     
-                    # Stats for this session (always show)
-                    if [ ${#SESSION_TIMELINES[@]} -gt 0 ]; then
-                        echo "                                <div class=\"grid grid-cols-1 md:grid-cols-3 gap-4 mb-8\">" >> "$HTML_FILE"
-                        echo "                                    <div class=\"bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl p-4 text-white\">" >> "$HTML_FILE"
-                        echo "                                        <div class=\"flex items-center justify-between\">" >> "$HTML_FILE"
-                        echo "                                            <div>" >> "$HTML_FILE"
-                        echo "                                                <p class=\"text-blue-100 text-sm\">Timelines in Session</p>" >> "$HTML_FILE"
-                        echo "                                                <p class=\"text-2xl font-bold\">${#SESSION_TIMELINES[@]}</p>" >> "$HTML_FILE"
-                        echo "                                            </div>" >> "$HTML_FILE"
-                        echo "                                            <svg class=\"w-10 h-10 opacity-50\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\">" >> "$HTML_FILE"
-                        echo "                                                <path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z\"/>" >> "$HTML_FILE"
-                        echo "                                            </svg>" >> "$HTML_FILE"
-                        echo "                                        </div>" >> "$HTML_FILE"
-                        echo "                                    </div>" >> "$HTML_FILE"
-                        echo "                                </div>" >> "$HTML_FILE"
-                    else
-                        # Show message for sessions without timelines
-                        echo "                                <div class=\"text-center py-8 text-gray-500\">" >> "$HTML_FILE"
-                        echo "                                    <svg class=\"w-16 h-16 mx-auto mb-4 text-gray-300\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\">" >> "$HTML_FILE"
-                        echo "                                        <path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z\"/>" >> "$HTML_FILE"
-                        echo "                                    </svg>" >> "$HTML_FILE"
-                        echo "                                    <p class=\"text-lg font-medium mb-2\">No timelines in this session yet</p>" >> "$HTML_FILE"
-                        echo "                                    <p class=\"text-sm\">Timelines will appear here as you make changes to your code</p>" >> "$HTML_FILE"
-                        echo "                                </div>" >> "$HTML_FILE"
-                    fi
-                    
                     # Session-level tabs and content
                     echo "                                <!-- Session Tabs -->" >> "$HTML_FILE"
                     echo "                                <div x-data=\"{ sessionTab: 'timelines' }\" class=\"mt-6\">" >> "$HTML_FILE"
