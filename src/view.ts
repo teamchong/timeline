@@ -26,12 +26,13 @@ interface Timeline {
   date: string;
   message: string;
   sessionId?: string;
-  stats: {
+  // Lazy-loaded details
+  stats?: {
     filesChanged: number;
     additions: number;
     deletions: number;
   };
-  files: Array<{
+  files?: Array<{
     status: string;
     path: string;
   }>;
@@ -157,7 +158,8 @@ async function getSessionFiles(projectPath?: string): Promise<Map<string, string
   return sessions;
 }
 
-async function getTimelineDetails(branch: string): Promise<Timeline> {
+// Fast timeline info (just basic info, no diff stats)
+async function getTimelineInfo(branch: string): Promise<Timeline> {
   const [hash, shortHash, time, date, message] = await Promise.all([
     $`git rev-parse ${branch}`.text().then(h => h.trim()),
     $`git rev-parse --short ${branch}`.text().then(h => h.trim()),
@@ -166,6 +168,24 @@ async function getTimelineDetails(branch: string): Promise<Timeline> {
     $`git log -1 --pretty=format:"%s" ${branch}`.text(),
   ]);
 
+  const metadata = await getTimelineMetadata(branch);
+
+  return {
+    branch,
+    hash,
+    shortHash,
+    time: time.trim(),
+    date: date.trim(),
+    message: message.trim(),
+    sessionId: metadata.sessionId,
+    // Stats and files are lazy-loaded
+  };
+}
+
+// Full timeline details (with diff stats - used on demand)
+async function getTimelineDetails(branch: string): Promise<Timeline> {
+  const baseInfo = await getTimelineInfo(branch);
+  
   // Get stats
   const stats = await $`git diff --shortstat HEAD ${branch}`.text();
   const filesChanged = parseInt(stats.match(/(\d+) files? changed/)?.[1] || '0');
@@ -183,16 +203,8 @@ async function getTimelineDetails(branch: string): Promise<Timeline> {
       return { status, path: pathParts.join(' ') };
     });
 
-  const metadata = await getTimelineMetadata(branch);
-
   return {
-    branch,
-    hash,
-    shortHash,
-    time: time.trim(),
-    date: date.trim(),
-    message: message.trim(),
-    sessionId: metadata.sessionId,
+    ...baseInfo,
     stats: { filesChanged, additions, deletions },
     files,
   };
@@ -200,22 +212,12 @@ async function getTimelineDetails(branch: string): Promise<Timeline> {
 
 async function processSessionsParallel(
   sessionIds: string[],
-  allTimelines: string[]
+  timelineCache: Map<string, { hash: string; sessionId?: string; projectPath?: string }>
 ): Promise<Session[]> {
   console.log(`\n📊 Processing ${sessionIds.length} sessions in parallel...`);
 
-  // Create timeline cache for fast lookup
-  console.log('📦 Building timeline cache...');
-  const timelineCache = new Map<string, { hash: string; sessionId?: string; projectPath?: string }>();
-
-  await Promise.all(
-    allTimelines.map(async timeline => {
-      const metadata = await getTimelineMetadata(timeline);
-      timelineCache.set(timeline, metadata);
-    })
-  );
-
-  console.log(`✅ Cached ${timelineCache.size} timelines`);
+  // Use the provided timeline cache (already built)
+  console.log(`✅ Using cached ${timelineCache.size} timelines`);
 
   // Process all sessions in parallel
   const sessionFiles = await getSessionFiles();
@@ -287,15 +289,24 @@ async function processSessionsParallel(
 
       for (const [timeline, metadata] of timelineCache) {
         if (metadata.sessionId === sessionId) {
-          const details = await getTimelineDetails(timeline);
-          sessionTimelines.push(details);
+          // Create minimal timeline info (no git calls yet)
+          const info: Timeline = {
+            branch: timeline,
+            hash: metadata.hash,
+            shortHash: metadata.hash.substring(0, 7),
+            time: 'Loading...', 
+            date: new Date().toISOString(), // Placeholder
+            message: 'Loading...',
+            sessionId: metadata.sessionId,
+          };
+          sessionTimelines.push(info);
           
           // Group by project
           const projectPath = metadata.projectPath || process.cwd();
           if (!projectMap.has(projectPath)) {
             projectMap.set(projectPath, []);
           }
-          projectMap.get(projectPath)!.push(details);
+          projectMap.get(projectPath)!.push(info);
         }
       }
       
@@ -476,9 +487,15 @@ function generateHTML(data: TimelineData): string {
                                                             <p class="text-sm text-gray-500">⏰ <span x-text="timeline.time"></span></p>
                                                             <h5 class="font-medium" x-text="timeline.message"></h5>
                                                             <div class="flex items-center gap-4 mt-2 text-sm">
-                                                                <span>📁 <span x-text="timeline.stats.filesChanged"></span> files</span>
-                                                                <span class="text-green-600">+<span x-text="timeline.stats.additions"></span></span>
-                                                                <span class="text-red-600">-<span x-text="timeline.stats.deletions"></span></span>
+                                                                <template x-if="timeline.stats">
+                                                                    <span>📁 <span x-text="timeline.stats.filesChanged"></span> files</span>
+                                                                </template>
+                                                                <template x-if="timeline.stats">
+                                                                    <span class="text-green-600">+<span x-text="timeline.stats.additions"></span></span>
+                                                                </template>
+                                                                <template x-if="timeline.stats">
+                                                                    <span class="text-red-600">-<span x-text="timeline.stats.deletions"></span></span>
+                                                                </template>
                                                                 <code class="text-xs bg-gray-200 px-2 py-1 rounded" x-text="timeline.shortHash"></code>
                                                                 <button @click.stop="(() => {
                                                                     const cmd = 'timeline travel ' + (project.timelines.length - tIdx);
@@ -510,6 +527,105 @@ function generateHTML(data: TimelineData): string {
 </html>`;
 }
 
+// Generate instant loading HTML with Alpine.js pre-configured
+function generateLoadingHTML(): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Timeline View</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        [x-cloak] { display: none !important; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-green-100 via-emerald-50 to-teal-100 min-h-screen p-4 md:p-8"
+      x-data="timelineApp()" x-init="loadData()">
+    
+    <div class="max-w-7xl mx-auto">
+        <!-- Loading State -->
+        <div x-show="loading" class="bg-white rounded-3xl shadow-2xl overflow-hidden mb-8">
+            <div class="bg-gradient-to-r from-green-500 to-emerald-600 text-white p-8 md:p-12">
+                <div class="flex items-center justify-center mb-4">
+                    <svg class="w-12 h-12 mr-3 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    <h1 class="text-4xl md:text-5xl font-bold">Loading Timeline...</h1>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Main Content (hidden while loading) -->
+        <div x-show="!loading" x-cloak>
+            <!-- Header -->
+            <div class="bg-white rounded-3xl shadow-2xl overflow-hidden mb-8">
+                <div class="bg-gradient-to-r from-green-500 to-emerald-600 text-white p-8 md:p-12">
+                    <h1 class="text-4xl md:text-5xl font-bold text-center">Timeline</h1>
+                    <div class="text-center mt-4">
+                        <p class="text-sm">📂 <span x-text="sessions.length"></span> Sessions • ⏰ <span x-text="totalTimelines"></span> Timelines</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Sessions List -->
+            <div class="space-y-4">
+                <template x-for="(session, idx) in sessions" :key="session.id">
+                    <div class="bg-white rounded-xl shadow-lg overflow-hidden">
+                        <div @click="activeSession = activeSession === idx ? -1 : idx"
+                             class="p-6 cursor-pointer hover:bg-gray-50 transition-colors">
+                            <div class="flex items-center justify-between">
+                                <div class="flex-1">
+                                    <h3 class="text-lg font-semibold">Session #<span x-text="idx + 1"></span></h3>
+                                    <p class="text-xs text-gray-500 font-mono" x-text="session.id"></p>
+                                </div>
+                                <span class="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm">
+                                    <span x-text="session.projects?.reduce((sum, p) => sum + p.timelines.length, 0) || 0"></span> timelines
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <!-- Expanded content -->
+                        <div x-show="activeSession === idx" x-collapse class="border-t p-6">
+                            <p class="text-gray-500">Timeline details here...</p>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+    function timelineApp() {
+        return {
+            loading: true,
+            sessions: [],
+            totalTimelines: 0,
+            activeSession: -1,
+            
+            async loadData() {
+                try {
+                    const response = await fetch('http://localhost:8765/api/timeline-data');
+                    const data = await response.json();
+                    
+                    // Update data directly (no innerHTML replacement)
+                    this.sessions = data.sessions || [];
+                    this.totalTimelines = data.totalTimelines || 0;
+                    this.loading = false;
+                } catch (error) {
+                    console.error('Failed to load timeline data:', error);
+                    this.loading = false;
+                }
+            }
+        }
+    }
+    </script>
+</body>
+</html>`;
+}
+
 // Command handlers
 async function viewCommand() {
   if (!(await isGitRepo())) {
@@ -517,71 +633,82 @@ async function viewCommand() {
     process.exit(1);
   }
 
-  const startTime = performance.now();
   const currentProjectPath = process.cwd();
 
-  const currentBranch = await getCurrentBranch();
-  const allTimelines = await getAllTimelines(currentBranch);
-
-  console.log(`🔍 Found ${allTimelines.length} timelines on branch '${currentBranch}'`);
-  console.log(`📁 Current project: ${currentProjectPath}`);
-
-  // Get all Claude session files for this project
-  const sessionFiles = await getSessionFiles(currentProjectPath);
-  
-  // Build timeline metadata cache
-  const timelinesBySession = new Map<string, Timeline[]>();
-  
-  for (const timeline of allTimelines) {
-    const metadata = await getTimelineMetadata(timeline);
-    if (metadata.sessionId) {
-      // Map timeline to session
-      if (!timelinesBySession.has(metadata.sessionId)) {
-        timelinesBySession.set(metadata.sessionId, []);
-      }
-      const details = await getTimelineDetails(timeline);
-      timelinesBySession.get(metadata.sessionId)!.push(details);
-    }
-  }
-  
-  // Get ALL Claude sessions from the project directory
-  const relevantSessions = Array.from(sessionFiles.keys());
-  
-  console.log(`📂 Found ${relevantSessions.length} Claude sessions for this project`);
-  console.log(`📊 Total ${sessionFiles.size} Claude sessions overall`);
-
-  // Process only the relevant Claude sessions
-  const sessions = await processSessionsParallel(relevantSessions, allTimelines);
-  
-  // Filter to only show sessions that have timelines for this project
-  const filteredSessions = sessions.filter(session => 
-    session.projects.some(p => p.projectPath === currentProjectPath)
-  );
-
-  // Calculate total timelines for this project
-  const totalTimelines = filteredSessions.reduce((sum, s) => 
-    sum + s.projects.filter(p => p.projectPath === currentProjectPath)
-      .reduce((pSum, p) => pSum + p.timelines.length, 0), 0
-  );
-
-  // Generate HTML (use filtered sessions for this project)
-  const html = generateHTML({ sessions: filteredSessions, totalTimelines });
-
-  // Write to temp file
+  // Write loading HTML immediately
   const tempFile = `/tmp/timeline-view-${Date.now()}.html`;
-  await Bun.write(tempFile, html);
-
-  const endTime = performance.now();
-  console.log(`\n✅ Generated in ${Math.round(endTime - startTime)}ms`);
-  console.log(`📄 View saved to: ${tempFile}`);
-
-  // Open in browser
+  await Bun.write(tempFile, generateLoadingHTML());
+  
+  // Open browser IMMEDIATELY with loading page
   try {
     await $`open ${tempFile}`.quiet();
-    console.log('🌐 Opened in browser');
+    console.log('🌐 Opening browser with loading page...');
   } catch {
     console.log('💡 Open the file in your browser to view');
   }
+  
+  // Now start the server to handle data requests
+  const server = Bun.serve({
+    port: 8765,
+    async fetch(request) {
+      const url = new URL(request.url);
+      
+      // Enable CORS
+      const headers = {
+        'Access-Control-Allow-Origin': '*',
+        'Content-Type': 'application/json',
+      };
+      
+      if (url.pathname === '/api/timeline-data') {
+        // Generate the timeline data
+        const currentBranch = await getCurrentBranch();
+        const allTimelines = await getAllTimelines(currentBranch);
+        
+        console.log(`🔍 Found ${allTimelines.length} timelines on branch '${currentBranch}'`);
+        
+        // Get all Claude session files for this project
+        const sessionFiles = await getSessionFiles(currentProjectPath);
+        
+        // Build lightweight timeline metadata cache
+        const timelineMetadataCache = new Map<string, { hash: string; sessionId?: string; projectPath?: string }>();
+        
+        for (const timeline of allTimelines) {
+          const metadata = await getTimelineMetadata(timeline);
+          if (metadata.sessionId) {
+            timelineMetadataCache.set(timeline, metadata);
+          }
+        }
+        
+        const relevantSessions = Array.from(sessionFiles.keys());
+        console.log(`📂 Found ${relevantSessions.length} Claude sessions`);
+        
+        // Process sessions
+        const sessions = await processSessionsParallel(relevantSessions, timelineMetadataCache);
+        
+        // Filter to current project
+        const filteredSessions = sessions.filter(session => 
+          session.projects.some(p => p.projectPath === currentProjectPath)
+        );
+        
+        const totalTimelines = filteredSessions.reduce((sum, s) => 
+          sum + s.projects.filter(p => p.projectPath === currentProjectPath)
+            .reduce((pSum, p) => pSum + p.timelines.length, 0), 0
+        );
+        
+        // Return JSON data directly (not HTML)
+        return new Response(JSON.stringify({ 
+          sessions: filteredSessions, 
+          totalTimelines 
+        }), { headers });
+      }
+      
+      return new Response('Not found', { status: 404 });
+    },
+  });
+  
+  console.log(`\n✅ Server running at http://localhost:${server.port}`);
+  console.log('📊 Loading timeline data in background...');
+  console.log('\nPress Ctrl+C to stop the server');
 }
 
 async function saveCommand() {
