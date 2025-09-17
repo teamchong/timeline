@@ -41,8 +41,23 @@ export async function save(): Promise<void> {
     return;
   }
   
-  // Get session ID from environment
-  const sessionId = process.env.CLAUDE_SESSION_ID || 'manual';
+  // Get hook data from stdin (Claude Code provides this)
+  let hookData: any = null;
+  
+  try {
+    if (!process.stdin.isTTY) {
+      const stdinData = await Bun.stdin.text();
+      if (stdinData && stdinData.trim()) {
+        hookData = JSON.parse(stdinData);
+      }
+    }
+  } catch (error) {
+    // No stdin data or invalid JSON
+  }
+  
+  // Extract session ID and project path from hook data
+  const sessionId = hookData?.sessionId || Date.now().toString();
+  const projectPath = hookData?.projectPath || process.cwd();
   
   // Create timeline
   const timestamp = new Date().toISOString();
@@ -59,8 +74,15 @@ export async function save(): Promise<void> {
   const timelineName = `timelines/${branch}/+${timelineNumber}_snapshot`;
   await git(['update-ref', `refs/heads/${timelineName}`, commitHash]);
   
-  // Add metadata as git note
-  const metadata = `Session-Id: ${sessionId}\nTimestamp: ${timestamp}\nBranch: ${branch}`;
+  // Add metadata as git note  
+  const metadata = JSON.stringify({
+    sessionId,
+    timestamp,
+    branch,
+    tool: hookData?.tool,
+    files: hookData?.files,
+    projectPath: hookData?.projectPath || process.cwd()
+  });
   await git(['notes', '--ref=timeline-metadata', 'add', '-f', '-m', metadata, commitHash]);
   
   console.log(`✅ Timeline created: ${timelineName}`);

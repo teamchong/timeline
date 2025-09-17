@@ -97,10 +97,17 @@ async function getTimelineMetadata(
     .catch(() => '');
   if (!hash) return { hash: '' };
 
-  const notes = await $`git notes --ref=timeline show ${hash}`.text().catch(() => '');
-  const sessionId = notes.match(/^Session-Id:\s*(.+)$/m)?.[1];
-
-  return { hash, sessionId };
+  const notes = await $`git notes --ref=timeline-metadata show ${hash}`.text().catch(() => '');
+  
+  // Try to parse as JSON first (new format)
+  try {
+    const metadata = JSON.parse(notes);
+    return { hash, sessionId: metadata.sessionId };
+  } catch {
+    // Fall back to old format
+    const sessionId = notes.match(/^Session-Id:\s*(.+)$/m)?.[1];
+    return { hash, sessionId };
+  }
 }
 
 async function getSessionFiles(): Promise<Map<string, string>> {
