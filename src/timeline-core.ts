@@ -63,8 +63,45 @@ export async function save(): Promise<void> {
   const timestamp = new Date().toISOString();
   const message = `Timeline snapshot at ${timestamp}`;
   
-  // Create tree from current state
-  const tree = await git(['write-tree']);
+  // Create tree from current state including working directory changes
+  // We need to use a temporary index to capture ALL changes, not just staged ones
+  const tempIndex = `/tmp/timeline-index-${Date.now()}`;
+  
+  let tree: string;
+  try {
+    // Save current index state
+    const originalIndex = process.env.GIT_INDEX_FILE;
+    
+    // Use temporary index
+    process.env.GIT_INDEX_FILE = tempIndex;
+    
+    // First, read the current HEAD into our temporary index
+    await git(['read-tree', 'HEAD']);
+    
+    // Then add all changes from working directory (including untracked files)
+    await git(['add', '-A', '.']);
+    
+    // Create tree from the temporary index
+    tree = await git(['write-tree']);
+    
+    // Restore original index
+    if (originalIndex) {
+      process.env.GIT_INDEX_FILE = originalIndex;
+    } else {
+      delete process.env.GIT_INDEX_FILE;
+    }
+    
+    // Clean up temporary index
+    try {
+      await Bun.$`rm -f ${tempIndex}`.quiet();
+    } catch {
+      // Ignore cleanup errors
+    }
+  } catch (error) {
+    // Restore index on error
+    delete process.env.GIT_INDEX_FILE;
+    throw error;
+  }
   
   // Create commit object
   const commitHash = await git(['commit-tree', tree, '-p', currentCommit, '-m', message]);
