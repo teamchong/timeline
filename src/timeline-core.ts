@@ -1,12 +1,7 @@
 #!/usr/bin/env bun
 
-import { spawn } from 'child_process';
-import { promisify } from 'util';
-import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-
-const exec = promisify(spawn);
 
 // Git operations
 async function git(args: string[]): Promise<string> {
@@ -81,7 +76,7 @@ export async function install(): Promise<void> {
     process.exit(1);
   }
   
-  const settings = JSON.parse(await readFile(settingsPath, 'utf-8'));
+  const settings = JSON.parse(await Bun.file(settingsPath).text());
   const timelineCmd = join(process.env.HOME!, '.local', 'bin', 'timeline') + ' save';
   
   // Check if already installed
@@ -99,7 +94,7 @@ export async function install(): Promise<void> {
   }
   
   // Backup settings
-  await writeFile(`${settingsPath}.backup`, JSON.stringify(settings, null, 2));
+  await Bun.write(`${settingsPath}.backup`, JSON.stringify(settings, null, 2));
   console.log(`📋 Backed up settings to: ${settingsPath}.backup`);
   
   // Add to PostToolUse
@@ -144,7 +139,7 @@ export async function install(): Promise<void> {
   }
   
   // Write updated settings
-  await writeFile(settingsPath, JSON.stringify(settings, null, 2));
+  await Bun.write(settingsPath, JSON.stringify(settings, null, 2));
   console.log('✅ Installed timeline hooks to settings.json');
   console.log('\n🎉 Timeline hook installation complete!');
 }
@@ -158,10 +153,10 @@ export async function uninstall(): Promise<void> {
     return;
   }
   
-  const settings = JSON.parse(await readFile(settingsPath, 'utf-8'));
+  const settings = JSON.parse(await Bun.file(settingsPath).text());
   
   // Backup settings
-  await writeFile(`${settingsPath}.backup`, JSON.stringify(settings, null, 2));
+  await Bun.write(`${settingsPath}.backup`, JSON.stringify(settings, null, 2));
   console.log(`📋 Backed up settings to: ${settingsPath}.backup`);
   
   // Remove from PostToolUse
@@ -189,7 +184,7 @@ export async function uninstall(): Promise<void> {
   }
   
   // Write updated settings
-  await writeFile(settingsPath, JSON.stringify(settings, null, 2));
+  await Bun.write(settingsPath, JSON.stringify(settings, null, 2));
   console.log('✅ Timeline hooks removed from settings.json');
   console.log('\n🗑️  Timeline hook uninstallation complete!');
 }
