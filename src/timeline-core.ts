@@ -31,6 +31,14 @@ async function getCurrentBranch(): Promise<string> {
 
 // Create timeline snapshot
 export async function save(): Promise<void> {
+  // First check if we're in a git repository
+  try {
+    await git(['rev-parse', '--git-dir']);
+  } catch (error) {
+    // Not in a git repository - exit silently since this is called by hooks
+    return;
+  }
+  
   const branch = await getCurrentBranch();
   const currentCommit = await git(['rev-parse', 'HEAD']);
   
@@ -56,7 +64,24 @@ export async function save(): Promise<void> {
   }
   
   // Extract session ID and project path from hook data
-  const sessionId = hookData?.sessionId || Date.now().toString();
+  // If no hook data, try to find current Claude session from project files
+  let sessionId = hookData?.sessionId;
+  
+  if (!sessionId) {
+    // Try to get the most recently modified Claude session
+    const projectDir = `${process.env.HOME}/.claude/projects/-Users-steven-chong-Downloads-repos-timeline`;
+    try {
+      const files = await Bun.$`ls -t ${projectDir}/*.jsonl 2>/dev/null | head -1`.text();
+      const latestFile = files.trim();
+      if (latestFile) {
+        sessionId = latestFile.split('/').pop()?.replace('.jsonl', '');
+      }
+    } catch {
+      // Fallback to timestamp if we can't find a session
+      sessionId = Date.now().toString();
+    }
+  }
+  
   const projectPath = hookData?.projectPath || process.cwd();
   
   // Create timeline
