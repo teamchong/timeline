@@ -31,23 +31,24 @@ async function getCurrentBranch(): Promise<string> {
 
 // Create timeline snapshot
 export async function save(): Promise<void> {
-  // First check if we're in a git repository
   try {
-    await git(['rev-parse', '--git-dir']);
-  } catch (error) {
-    // Not in a git repository - exit silently since this is called by hooks
-    return;
-  }
-  
-  const branch = await getCurrentBranch();
-  const currentCommit = await git(['rev-parse', 'HEAD']);
-  
-  // Check for uncommitted changes
-  const status = await git(['status', '--porcelain']);
-  if (!status) {
-    console.log('No changes to save');
-    return;
-  }
+    // First check if we're in a git repository
+    try {
+      await git(['rev-parse', '--git-dir']);
+    } catch (error) {
+      // Not in a git repository - exit silently since this is called by hooks
+      return;
+    }
+    
+    const branch = await getCurrentBranch();
+    const currentCommit = await git(['rev-parse', 'HEAD']);
+    
+    // Check for uncommitted changes
+    const status = await git(['status', '--porcelain']);
+    if (!status) {
+      // No changes - exit silently (no console output for hooks)
+      return;
+    }
   
   // Get hook data from stdin (Claude Code provides this)
   let hookData: any = null;
@@ -147,7 +148,12 @@ export async function save(): Promise<void> {
   });
   await git(['notes', '--ref=timeline-metadata', 'add', '-f', '-m', metadata, commitHash]);
   
-  console.log(`✅ Timeline created: ${timelineName}`);
+  // Success - exit silently (no output for hooks)
+  } catch (error) {
+    // Silently handle ALL errors - this is called by hooks
+    // No output to avoid cluttering user's terminal
+    return;
+  }
 }
 
 // Install Claude Code hooks
