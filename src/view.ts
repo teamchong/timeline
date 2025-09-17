@@ -14,9 +14,8 @@
  */
 
 import { $ } from 'bun';
-import { existsSync, mkdtempSync, rmSync } from 'fs';
+import { existsSync } from 'fs';
 import { join, basename } from 'path';
-import { tmpdir } from 'os';
 
 // Types
 interface Timeline {
@@ -80,15 +79,32 @@ async function isGitRepo(): Promise<boolean> {
 
 async function getAllTimelines(branch: string): Promise<string[]> {
   try {
-    const refPattern = `refs/heads/timelines/${branch}/`;
-    // Use string array to properly handle the command
-    const result =
-      await $`git for-each-ref --sort=-committerdate --format="%(refname:short)" ${refPattern}`.text();
-    const lines = result
-      .trim()
-      .split('\n')
-      .filter(line => line && line !== '');
-    return lines;
+    const gitDir = await $`git rev-parse --git-dir`.text().then(d => d.trim());
+    const timelinesDir = join(gitDir, 'refs', 'heads', 'timelines', branch);
+    
+    if (!existsSync(timelinesDir)) return [];
+    
+    // Use Bun's Glob to find timeline refs
+    const glob = new Bun.Glob("*");
+    const timelines: string[] = [];
+    
+    for await (const file of glob.scan(timelinesDir)) {
+      // Reconstruct the full ref name
+      timelines.push(`timelines/${branch}/${file}`);
+    }
+    
+    // Sort by modification time (newest first)
+    const timelinesWithStats = await Promise.all(
+      timelines.map(async (timeline) => {
+        const filePath = join(timelinesDir, basename(timeline));
+        const stat = await Bun.file(filePath).stat();
+        return { timeline, mtime: stat.mtime };
+      })
+    );
+    
+    return timelinesWithStats
+      .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
+      .map(t => t.timeline);
   } catch (e) {
     // Silently return empty array if no timelines
     return [];
@@ -130,13 +146,12 @@ async function getSessionFiles(projectPath?: string): Promise<Map<string, string
 
   if (!existsSync(projectDir)) return sessions;
 
-  const files = await $`find ${projectDir} -name "*.jsonl" -type f`.text();
-  for (const file of files
-    .trim()
-    .split('\n')
-    .filter(f => f)) {
+  // Use Bun's Glob API to find files
+  const glob = new Bun.Glob("*.jsonl");
+  for await (const file of glob.scan(projectDir)) {
+    const fullPath = join(projectDir, file);
     const sessionId = basename(file, '.jsonl');
-    sessions.set(sessionId, file);
+    sessions.set(sessionId, fullPath);
   }
 
   return sessions;
