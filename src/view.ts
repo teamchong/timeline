@@ -580,20 +580,83 @@ function generateLoadingHTML(): string {
                                 <div class="flex-1">
                                     <h3 class="text-lg font-semibold">Session #<span x-text="idx + 1"></span></h3>
                                     <p class="text-xs text-gray-500 font-mono" x-text="session.id"></p>
+                                    <div class="text-xs text-gray-500 space-y-1 mt-1">
+                                        <p>📅 Created: <span x-text="formatTime(session.created)"></span></p>
+                                        <p>🔄 Modified: <span x-text="formatTime(session.modified)"></span></p>
+                                    </div>
                                 </div>
-                                <span class="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm">
-                                    <span x-text="session.projects?.reduce((sum, p) => sum + p.timelines.length, 0) || 0"></span> timelines
-                                </span>
+                                <div class="flex items-center gap-2">
+                                    <button @click.stop="showResumeModal(session.id)"
+                                            class="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm hover:bg-blue-200 transition-colors">
+                                        📖 Resume
+                                    </button>
+                                    <span class="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm">
+                                        <span x-text="session.projects?.reduce((sum, p) => sum + p.timelines.length, 0) || 0"></span> timelines
+                                    </span>
+                                </div>
                             </div>
                         </div>
                         
                         <!-- Expanded content -->
                         <div x-show="activeSession === idx" x-collapse class="border-t p-6">
-                            <p class="text-gray-500">Timeline details here...</p>
+                            <template x-if="session.projects && session.projects.length > 0">
+                                <div class="space-y-4">
+                                    <template x-for="(project, pIdx) in session.projects" :key="project.projectPath">
+                                        <div class="bg-gray-50 rounded-lg p-4">
+                                            <h4 class="font-semibold mb-3">
+                                                📂 <span x-text="project.projectName"></span>
+                                            </h4>
+                                            <div class="space-y-2">
+                                                <template x-for="(timeline, tIdx) in project.timelines" :key="timeline.hash">
+                                                    <div class="bg-white rounded p-3 flex items-center justify-between">
+                                                        <div class="flex-1">
+                                                            <p class="text-sm font-medium" x-text="timeline.message"></p>
+                                                            <p class="text-xs text-gray-500">
+                                                                <span x-text="timeline.time"></span> • 
+                                                                <code x-text="timeline.shortHash"></code>
+                                                            </p>
+                                                        </div>
+                                                        <button @click="showTravelModal(timeline.branch, project.timelines.length - tIdx)"
+                                                                class="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs hover:bg-purple-200">
+                                                            ⏮ Travel
+                                                        </button>
+                                                    </div>
+                                                </template>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
                         </div>
                     </div>
                 </template>
             </div>
+        </div>
+    </div>
+    
+    <!-- Modals -->
+    <div x-show="modalVisible" x-cloak
+         class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50"
+         @click.self="modalVisible = false">
+        <div class="bg-white rounded-lg p-6 max-w-md w-full">
+            <h3 class="text-lg font-semibold mb-4" x-text="modalTitle"></h3>
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-2">Command to copy:</label>
+                <div class="flex gap-2">
+                    <input type="text" x-model="modalCommand" readonly
+                           class="flex-1 px-3 py-2 border border-gray-300 rounded-md bg-gray-50 font-mono text-sm"
+                           @click="$event.target.select()">
+                    <button @click="copyCommand()"
+                            class="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600">
+                        📋 Copy
+                    </button>
+                </div>
+            </div>
+            <p class="text-xs text-gray-500 mb-4" x-text="modalDescription"></p>
+            <button @click="modalVisible = false"
+                    class="w-full px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">
+                Close
+            </button>
         </div>
     </div>
     
@@ -604,6 +667,35 @@ function generateLoadingHTML(): string {
             sessions: [],
             totalTimelines: 0,
             activeSession: -1,
+            modalVisible: false,
+            modalTitle: '',
+            modalCommand: '',
+            modalDescription: '',
+            
+            formatTime(timestamp) {
+                if (!timestamp || timestamp === 'Unknown') return 'Unknown';
+                return new Date(timestamp).toLocaleString();
+            },
+            
+            showResumeModal(sessionId) {
+                this.modalTitle = '📖 Resume Session';
+                this.modalCommand = 'bun /Users/steven_chong/Downloads/repos/timeline/render-conversation.ts ' + sessionId;
+                this.modalDescription = 'This command will render the conversation history for this session.';
+                this.modalVisible = true;
+            },
+            
+            showTravelModal(branch, number) {
+                this.modalTitle = '⏮ Travel to Timeline';
+                this.modalCommand = 'timeline travel ' + number;
+                this.modalDescription = 'This will restore your working directory to timeline ' + number + ' on branch ' + branch + '.';
+                this.modalVisible = true;
+            },
+            
+            copyCommand() {
+                navigator.clipboard.writeText(this.modalCommand);
+                // Optional: Show a toast notification
+                alert('Command copied to clipboard!');
+            },
             
             async loadData() {
                 try {

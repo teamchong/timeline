@@ -3,21 +3,59 @@
 import { existsSync } from 'fs';
 import { join } from 'path';
 
-// Git operations
-async function git(args: string[]): Promise<string> {
-  const proc = Bun.spawn(['git', ...args], {
+// Utility function for safe command execution that prevents zombies
+async function execCommand(cmd: string[], options: any = {}): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const proc = Bun.spawn(cmd, {
     stdout: 'pipe',
     stderr: 'pipe',
+    ...options
   });
   
-  const output = await new Response(proc.stdout).text();
-  const error = await new Response(proc.stderr).text();
+  // Read streams
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text()
+  ]);
   
-  if (error && !error.includes('warning:')) {
-    throw new Error(`Git error: ${error}`);
+  // CRITICAL: Wait for process to exit to prevent zombies
+  const exitCode = await proc.exited;
+  
+  return { stdout: stdout.trim(), stderr: stderr.trim(), exitCode };
+}
+
+// Execute shell command safely
+async function execShell(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return execCommand(['sh', '-c', command]);
+}
+
+// Git operations with retry logic for lock issues
+async function git(args: string[], retries = 1): Promise<string> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const { stdout, stderr, exitCode } = await execCommand(['git', ...args]);
+      
+      // Check for lock errors
+      if (stderr && (stderr.includes('index.lock') || stderr.includes('Another git process'))) {
+        if (attempt < retries) {
+          // Wait a bit before retry
+          await new Promise(resolve => setTimeout(resolve, 500));
+          continue;
+        }
+      }
+      
+      if (stderr && !stderr.includes('warning:')) {
+        throw new Error(`Git error: ${stderr}`);
+      }
+      
+      return stdout;
+    } catch (error) {
+      if (attempt === retries) throw error;
+      // Wait before retry
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
   }
   
-  return output.trim();
+  return '';
 }
 
 // Get current branch
@@ -34,20 +72,20 @@ export async function save(): Promise<void> {
   try {
     // First check if we're in a git repository
     try {
-      await git(['rev-parse', '--git-dir']);
+      await git(['rev-parse', '--git-dir'], 2); // Retry once for lock issues
     } catch (error) {
       // Not in a git repository - exit silently since this is called by hooks
-      return;
+      process.exit(0);
     }
     
     const branch = await getCurrentBranch();
-    const currentCommit = await git(['rev-parse', 'HEAD']);
+    const currentCommit = await git(['rev-parse', 'HEAD'], 2);
     
-    // Check for uncommitted changes
-    const status = await git(['status', '--porcelain']);
+    // Check for uncommitted changes with retry
+    const status = await git(['status', '--porcelain'], 2);
     if (!status) {
       // No changes - exit silently (no console output for hooks)
-      return;
+      process.exit(0);
     }
   
   // Get hook data from stdin (Claude Code provides this)
@@ -72,8 +110,9 @@ export async function save(): Promise<void> {
     // Try to get the most recently modified Claude session
     const projectDir = `${process.env.HOME}/.claude/projects/-Users-steven-chong-Downloads-repos-timeline`;
     try {
-      const files = await Bun.$`ls -t ${projectDir}/*.jsonl 2>/dev/null | head -1`.text();
-      const latestFile = files.trim();
+      // Use utility function to avoid zombies
+      const { stdout } = await execShell(`ls -t ${projectDir}/*.jsonl 2>/dev/null | head -1`);
+      const latestFile = stdout;
       if (latestFile) {
         sessionId = latestFile.split('/').pop()?.replace('.jsonl', '');
       }
@@ -102,13 +141,13 @@ export async function save(): Promise<void> {
     process.env.GIT_INDEX_FILE = tempIndex;
     
     // First, read the current HEAD into our temporary index
-    await git(['read-tree', 'HEAD']);
+    await git(['read-tree', 'HEAD'], 2);
     
-    // Then add all changes from working directory (including untracked files)
-    await git(['add', '-A', '.']);
+    // Then add all changes from working directory (including untracked files) with retry
+    await git(['add', '-A', '.'], 2);
     
-    // Create tree from the temporary index
-    tree = await git(['write-tree']);
+    // Create tree from the temporary index with retry
+    tree = await git(['write-tree'], 2);
     
     // Restore original index
     if (originalIndex) {
@@ -119,7 +158,7 @@ export async function save(): Promise<void> {
     
     // Clean up temporary index
     try {
-      await Bun.$`rm -f ${tempIndex}`.quiet();
+      await execCommand(['rm', '-f', tempIndex]);
     } catch {
       // Ignore cleanup errors
     }
@@ -129,13 +168,13 @@ export async function save(): Promise<void> {
     throw error;
   }
   
-  // Create commit object
-  const commitHash = await git(['commit-tree', tree, '-p', currentCommit, '-m', message]);
+  // Create commit object with retry
+  const commitHash = await git(['commit-tree', tree, '-p', currentCommit, '-m', message], 2);
   
-  // Create timeline branch
+  // Create timeline branch with retry
   const timelineNumber = Date.now();
   const timelineName = `timelines/${branch}/+${timelineNumber}_snapshot`;
-  await git(['update-ref', `refs/heads/${timelineName}`, commitHash]);
+  await git(['update-ref', `refs/heads/${timelineName}`, commitHash], 2);
   
   // Add metadata as git note  
   const metadata = JSON.stringify({
@@ -148,11 +187,13 @@ export async function save(): Promise<void> {
   });
   await git(['notes', '--ref=timeline-metadata', 'add', '-f', '-m', metadata, commitHash]);
   
-  // Success - exit silently (no output for hooks)
+  // Success - exit silently with code 0
+  process.exit(0);
   } catch (error) {
     // Silently handle ALL errors - this is called by hooks
     // No output to avoid cluttering user's terminal
-    return;
+    // Always exit with code 0 to prevent hook failures
+    process.exit(0);
   }
 }
 

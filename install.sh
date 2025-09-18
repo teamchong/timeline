@@ -29,7 +29,16 @@ else
         echo "1) $SYSTEM_DIR (requires sudo, but works immediately)"
         echo "2) $USER_DIR (no sudo, but you'll need to add to PATH)"
         echo ""
-        read -p "Enter choice (1 or 2): " choice
+        
+        # Add timeout and default to user directory if no response
+        if [ -t 0 ]; then
+            # Interactive mode - wait for input with timeout
+            read -t 30 -p "Enter choice (1 or 2, defaults to 2 after 30s): " choice || choice=2
+        else
+            # Non-interactive mode - default to user directory
+            echo "Non-interactive mode detected, defaulting to user directory"
+            choice=2
+        fi
         
         case $choice in
             1)

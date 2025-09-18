@@ -21,10 +21,15 @@ echo
 # Remove Claude Code hooks first
 if [ -x "$TIMELINE_BIN" ]; then
     echo -e "${BLUE}Removing Claude Code hooks...${NC}"
-    "$TIMELINE_BIN" uninstall 2>/dev/null || true
+    timeout 5 "$TIMELINE_BIN" uninstall 2>/dev/null || true
+elif [ -x "./bin/timeline" ]; then
+    echo -e "${BLUE}Removing Claude Code hooks (using local binary)...${NC}"
+    timeout 5 ./bin/timeline uninstall 2>/dev/null || true
 elif [ -x "./timeline" ]; then
-    echo -e "${BLUE}Removing Claude Code hooks...${NC}"
-    ./timeline uninstall 2>/dev/null || true
+    echo -e "${BLUE}Removing Claude Code hooks (using old binary)...${NC}"
+    timeout 5 ./timeline uninstall 2>/dev/null || true
+else
+    echo -e "${YELLOW}Timeline binary not found, skipping hook removal${NC}"
 fi
 
 # Remove binary
@@ -44,8 +49,14 @@ echo -e "${BLUE}Cleaning up shell configuration...${NC}"
 for config in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
     if [ -f "$config" ]; then
         # Remove timeline PATH entries
-        grep -v "# Timeline" "$config" | grep -v "$BIN_DIR" > "$config.tmp" || true
-        mv "$config.tmp" "$config"
+        if grep -q "# Timeline\|$BIN_DIR" "$config" 2>/dev/null; then
+            grep -v "# Timeline" "$config" | grep -v "$BIN_DIR" > "$config.tmp" 2>/dev/null || true
+            if [ -s "$config.tmp" ]; then
+                mv "$config.tmp" "$config"
+            else
+                rm -f "$config.tmp"
+            fi
+        fi
     fi
 done
 

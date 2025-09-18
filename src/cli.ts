@@ -4,6 +4,11 @@ import * as timeline from './timeline-core';
 
 const VERSION = '2.0.0';
 
+// Handle signals to prevent zombie processes
+process.on('SIGINT', () => process.exit(0));
+process.on('SIGTERM', () => process.exit(0));
+process.on('SIGHUP', () => process.exit(0));
+
 async function showHelp() {
   console.log(`
 Timeline - Git-based snapshot tool for Claude Code (Bun version)
