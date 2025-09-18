@@ -677,6 +677,7 @@ function generateLoadingHTML(): string {
             modalCommand: '',
             modalDescription: '',
             copied: false,
+            copyTimer: null,
             
             formatTime(timestamp) {
                 if (!timestamp || timestamp === 'Unknown') return 'Unknown';
@@ -688,6 +689,11 @@ function generateLoadingHTML(): string {
                 this.modalCommand = 'claude -r ' + sessionId;
                 this.modalDescription = 'This command will resume the Claude Code session.';
                 this.modalVisible = true;
+                this.copied = false;
+                if (this.copyTimer) {
+                    clearTimeout(this.copyTimer);
+                    this.copyTimer = null;
+                }
             },
             
             showTravelModal(branch, number) {
@@ -695,13 +701,28 @@ function generateLoadingHTML(): string {
                 this.modalCommand = 'timeline travel ' + number;
                 this.modalDescription = 'This will restore your working directory to timeline ' + number + ' on branch ' + branch + '.';
                 this.modalVisible = true;
+                this.copied = false;
+                if (this.copyTimer) {
+                    clearTimeout(this.copyTimer);
+                    this.copyTimer = null;
+                }
             },
             
             copyCommand() {
                 navigator.clipboard.writeText(this.modalCommand);
+                
+                // Clear existing timer if user clicks again
+                if (this.copyTimer) {
+                    clearTimeout(this.copyTimer);
+                }
+                
+                // Set copied state
                 this.copied = true;
-                setTimeout(() => {
+                
+                // Set new timer - extends the duration if clicked again
+                this.copyTimer = setTimeout(() => {
                     this.copied = false;
+                    this.copyTimer = null;
                 }, 2000);
             },
             
