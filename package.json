@@ -32,6 +32,7 @@
     "clean": "rm -rf bin/ node_modules/ bun.lockb"
   },
   "devDependencies": {
+    "@types/bun": "^1.2.22",
     "@types/marked": "^6.0.0",
     "bun-types": "latest",
     "prettier": "^3.6.2"

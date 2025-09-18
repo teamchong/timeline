@@ -555,6 +555,9 @@ function generateLoadingHTML(): string {
                     </svg>
                     <h1 class="text-4xl md:text-5xl font-bold">Loading Timeline...</h1>
                 </div>
+                <div class="text-center">
+                    <p class="text-xl opacity-90" x-text="loadingMessage"></p>
+                </div>
             </div>
         </div>
         
@@ -664,6 +667,7 @@ function generateLoadingHTML(): string {
     function timelineApp() {
         return {
             loading: true,
+            loadingMessage: 'Initializing...',
             sessions: [],
             totalTimelines: 0,
             activeSession: -1,
@@ -699,14 +703,34 @@ function generateLoadingHTML(): string {
             
             async loadData() {
                 try {
-                    // Use relative URL since we're served from the same server
-                    const response = await fetch('/api/timeline-data');
-                    const data = await response.json();
+                    // Poll for data with loading status updates
+                    const pollForData = async () => {
+                        const response = await fetch('/api/timeline-data');
+                        const data = await response.json();
+                        
+                        if (data.loading) {
+                            // Still loading, check status
+                            const statusResponse = await fetch('/api/status');
+                            const status = await statusResponse.json();
+                            
+                            // Update loading message with progress
+                            const progressBar = status.totalSteps > 0 
+                                ? '[' + status.progress + '/' + status.totalSteps + ']' 
+                                : '';
+                            // Update the Alpine.js data property
+                            this.loadingMessage = progressBar + ' ' + status.message;
+                            
+                            // Poll again in 500ms
+                            setTimeout(() => pollForData(), 500);
+                        } else {
+                            // Data ready, update UI
+                            this.sessions = data.sessions || [];
+                            this.totalTimelines = data.totalTimelines || 0;
+                            this.loading = false;
+                        }
+                    };
                     
-                    // Update data directly (no innerHTML replacement)
-                    this.sessions = data.sessions || [];
-                    this.totalTimelines = data.totalTimelines || 0;
-                    this.loading = false;
+                    await pollForData();
                 } catch (error) {
                     console.error('Failed to load timeline data:', error);
                     this.loading = false;
@@ -727,8 +751,85 @@ async function viewCommand() {
   }
 
   const currentProjectPath = process.cwd();
+  
+  // Cache for timeline data
+  let cachedData: any = null;
+  let loadingStatus = { 
+    isLoading: true, 
+    message: 'Initializing...', 
+    progress: 0,
+    totalSteps: 4 
+  };
 
-  // Start the server first to serve both HTML and data
+  // Start background data processing
+  const loadDataInBackground = async () => {
+    try {
+      console.log('🚀 Starting background data processing...');
+      
+      // Step 1: Load git timelines
+      loadingStatus.message = 'Loading git timelines...';
+      loadingStatus.progress = 1;
+      const currentBranch = await getCurrentBranch();
+      const allTimelines = await getAllTimelines(currentBranch);
+      console.log(`🔍 Found ${allTimelines.length} timelines on branch '${currentBranch}'`);
+      
+      // Step 2: Load session files
+      loadingStatus.message = 'Loading Claude sessions...';
+      loadingStatus.progress = 2;
+      const sessionFiles = await getSessionFiles(currentProjectPath);
+      
+      // Step 3: Process metadata
+      loadingStatus.message = 'Processing timeline metadata...';
+      loadingStatus.progress = 3;
+      const timelineMetadataCache = new Map<string, { hash: string; sessionId?: string; projectPath?: string }>();
+      
+      for (const timeline of allTimelines) {
+        const metadata = await getTimelineMetadata(timeline);
+        if (metadata.sessionId) {
+          timelineMetadataCache.set(timeline, metadata);
+        }
+      }
+      
+      const relevantSessions = Array.from(sessionFiles.keys());
+      console.log(`📂 Found ${relevantSessions.length} Claude sessions`);
+      
+      // Step 4: Process sessions
+      loadingStatus.message = 'Processing session data...';
+      loadingStatus.progress = 4;
+      const sessions = await processSessionsParallel(relevantSessions, timelineMetadataCache);
+      
+      // Filter to current project
+      const filteredSessions = sessions.filter(session => 
+        session.projects.some(p => p.projectPath === currentProjectPath)
+      );
+      
+      const totalTimelines = filteredSessions.reduce((sum, s) => 
+        sum + s.projects.filter(p => p.projectPath === currentProjectPath)
+          .reduce((pSum, p) => pSum + p.timelines.length, 0), 0
+      );
+      
+      // Cache the processed data
+      cachedData = {
+        sessions: filteredSessions,
+        totalTimelines
+      };
+      
+      loadingStatus.isLoading = false;
+      loadingStatus.message = 'Data loaded successfully!';
+      console.log('✅ Background data processing complete');
+      
+    } catch (error) {
+      console.error('❌ Error in background processing:', error);
+      loadingStatus.isLoading = false;
+      loadingStatus.message = 'Error loading data';
+      cachedData = { sessions: [], totalTimelines: 0 };
+    }
+  };
+
+  // Start background loading immediately
+  loadDataInBackground();
+
+  // Start the server with cached data support
   const server = Bun.serve({
     port: 0, // Use random available port
     async fetch(request) {
@@ -749,47 +850,23 @@ async function viewCommand() {
         'Content-Type': 'application/json',
       };
       
+      // Serve loading status
+      if (url.pathname === '/api/status') {
+        return new Response(JSON.stringify(loadingStatus), { headers });
+      }
+      
+      // Serve cached data instantly or loading status
       if (url.pathname === '/api/timeline-data') {
-        // Generate the timeline data
-        const currentBranch = await getCurrentBranch();
-        const allTimelines = await getAllTimelines(currentBranch);
-        
-        console.log(`🔍 Found ${allTimelines.length} timelines on branch '${currentBranch}'`);
-        
-        // Get all Claude session files for this project
-        const sessionFiles = await getSessionFiles(currentProjectPath);
-        
-        // Build lightweight timeline metadata cache
-        const timelineMetadataCache = new Map<string, { hash: string; sessionId?: string; projectPath?: string }>();
-        
-        for (const timeline of allTimelines) {
-          const metadata = await getTimelineMetadata(timeline);
-          if (metadata.sessionId) {
-            timelineMetadataCache.set(timeline, metadata);
-          }
+        if (cachedData) {
+          // Data is ready, serve immediately from cache
+          return new Response(JSON.stringify(cachedData), { headers });
+        } else {
+          // Data still loading, return loading status
+          return new Response(JSON.stringify({
+            loading: true,
+            status: loadingStatus
+          }), { headers });
         }
-        
-        const relevantSessions = Array.from(sessionFiles.keys());
-        console.log(`📂 Found ${relevantSessions.length} Claude sessions`);
-        
-        // Process sessions
-        const sessions = await processSessionsParallel(relevantSessions, timelineMetadataCache);
-        
-        // Filter to current project
-        const filteredSessions = sessions.filter(session => 
-          session.projects.some(p => p.projectPath === currentProjectPath)
-        );
-        
-        const totalTimelines = filteredSessions.reduce((sum, s) => 
-          sum + s.projects.filter(p => p.projectPath === currentProjectPath)
-            .reduce((pSum, p) => pSum + p.timelines.length, 0), 0
-        );
-        
-        // Return JSON data directly (not HTML)
-        return new Response(JSON.stringify({ 
-          sessions: filteredSessions, 
-          totalTimelines 
-        }), { headers });
       }
       
       return new Response('Not found', { status: 404 });
