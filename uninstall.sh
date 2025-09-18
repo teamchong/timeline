@@ -19,17 +19,32 @@ echo "===================="
 echo
 
 # Remove Claude Code hooks first
-if [ -x "$TIMELINE_BIN" ]; then
-    echo -e "${BLUE}Removing Claude Code hooks...${NC}"
-    timeout 5 "$TIMELINE_BIN" uninstall 2>/dev/null || true
-elif [ -x "./bin/timeline" ]; then
-    echo -e "${BLUE}Removing Claude Code hooks (using local binary)...${NC}"
-    timeout 5 ./bin/timeline uninstall 2>/dev/null || true
-elif [ -x "./timeline" ]; then
-    echo -e "${BLUE}Removing Claude Code hooks (using old binary)...${NC}"
-    timeout 5 ./timeline uninstall 2>/dev/null || true
+# Check if timeout command is available
+if command -v timeout >/dev/null 2>&1; then
+    TIMEOUT_CMD="timeout 5"
+elif command -v gtimeout >/dev/null 2>&1; then
+    # On macOS with coreutils installed
+    TIMEOUT_CMD="gtimeout 5"
 else
-    echo -e "${YELLOW}Timeline binary not found, skipping hook removal${NC}"
+    # No timeout available - skip hook removal to avoid hanging
+    echo -e "${YELLOW}Warning: timeout command not found, skipping hook removal to avoid hanging${NC}"
+    echo -e "${YELLOW}You can manually remove hooks from ~/.claude/settings.json${NC}"
+    TIMEOUT_CMD=""
+fi
+
+if [ -n "$TIMEOUT_CMD" ]; then
+    if [ -x "$TIMELINE_BIN" ]; then
+        echo -e "${BLUE}Removing Claude Code hooks...${NC}"
+        $TIMEOUT_CMD "$TIMELINE_BIN" uninstall 2>/dev/null || true
+    elif [ -x "./bin/timeline" ]; then
+        echo -e "${BLUE}Removing Claude Code hooks (using local binary)...${NC}"
+        $TIMEOUT_CMD ./bin/timeline uninstall 2>/dev/null || true
+    elif [ -x "./timeline" ]; then
+        echo -e "${BLUE}Removing Claude Code hooks (using old binary)...${NC}"
+        $TIMEOUT_CMD ./timeline uninstall 2>/dev/null || true
+    else
+        echo -e "${YELLOW}Timeline binary not found, skipping hook removal${NC}"
+    fi
 fi
 
 # Remove binary
