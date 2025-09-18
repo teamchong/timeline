@@ -128,44 +128,35 @@ export async function save(): Promise<void> {
   const timestamp = new Date().toISOString();
   const message = `Timeline snapshot at ${timestamp}`;
   
-  // Create tree from current state including working directory changes
-  // We need to use a temporary index to capture ALL changes, not just staged ones
+  // Create tree from current state using temporary index
+  // This matches the original bash implementation exactly
   const tempIndex = `/tmp/timeline-index-${Date.now()}`;
-  
   let tree: string;
+  
   try {
-    // Save current index state
-    const originalIndex = process.env.GIT_INDEX_FILE;
-    
-    // Use temporary index
+    // Set up temporary index
     process.env.GIT_INDEX_FILE = tempIndex;
     
-    // First, read the current HEAD into our temporary index
+    // Read HEAD into temporary index
     await git(['read-tree', 'HEAD'], 2);
     
-    // Then add all changes from working directory (including untracked files) with retry
-    await git(['add', '-A', '.'], 2);
+    // Add all changes (tracked and untracked) to temporary index
+    // Using --all instead of -A to match original
+    await git(['add', '--all'], 2);
     
-    // Create tree from the temporary index with retry
+    // Create tree from temporary index
     tree = await git(['write-tree'], 2);
     
-    // Restore original index
-    if (originalIndex) {
-      process.env.GIT_INDEX_FILE = originalIndex;
-    } else {
-      delete process.env.GIT_INDEX_FILE;
-    }
+  } finally {
+    // Always clean up
+    delete process.env.GIT_INDEX_FILE;
     
-    // Clean up temporary index
+    // Remove temporary index file
     try {
       await execCommand(['rm', '-f', tempIndex]);
     } catch {
       // Ignore cleanup errors
     }
-  } catch (error) {
-    // Restore index on error
-    delete process.env.GIT_INDEX_FILE;
-    throw error;
   }
   
   // Create commit object with retry

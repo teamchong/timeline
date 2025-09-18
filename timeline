@@ -9,6 +9,9 @@
 #   - timeline install          - Install hook to Claude Code
 #   - timeline uninstall        - Remove hook from Claude Code
 
+
+# TODO: use git config to do this and display the diff in editor /usr/bin/git -C "/Users/steven_chong/Downloads/repos/kepler_app_594-deploy-cloud-sql-postgresq" -c "core.editor=/Applications/Cursor.app/Contents/Resources/app/bin/cursor --wait --reuse-window" -c "sequence.editor=/Applications/Cursor.app/Contents/Resources/app/bin/cursor --wait --reuse-window" rebase --interactive 32d5957ae5984e7323cab60d52af4c8396d3ba20
+
 set -e
 
 # Auto-detect script location

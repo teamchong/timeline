@@ -435,21 +435,19 @@ function generateHTML(data: TimelineData): string {
         </div>
 
         <!-- Sessions List -->
-        <div class="space-y-0">
+        <div class="space-y-2">
             <template x-for="(session, idx) in sessions" :key="session.id">
-                <div class="bg-white rounded-xl shadow-lg overflow-hidden">
+                <div class="border border-gray-200 rounded-lg bg-white shadow-sm hover:shadow-md transition-shadow">
                     <!-- Session Header -->
                     <div @click="activeSession = activeSession === idx ? -1 : idx"
-                         class="p-6 cursor-pointer hover:bg-gray-50 transition-colors">
+                         class="p-4 cursor-pointer hover:bg-gray-50 transition-colors border-b border-gray-100">
                         <div class="flex items-center justify-between">
                             <div class="flex-1">
-                                <h3 class="text-lg font-semibold">Session #<span x-text="idx + 1"></span></h3>
-                                <p class="text-xs text-gray-500 font-mono" x-text="session.id"></p>
-                                <div class="text-xs text-gray-500 space-y-1">
-                                    <p>
-                                      📅 Created: <span x-text="formatTime(session.created)"></span>
-                                      🔄 Modified: <span x-text="formatTime(session.modified)"></span>
-                                    </p>
+                                <h3 class="text-lg font-semibold text-gray-800">Session #<span x-text="idx + 1"></span></h3>
+                                <p class="text-xs text-gray-500 font-mono mt-1" x-text="session.id"></p>
+                                <div class="text-xs text-gray-500 mt-2 flex gap-4">
+                                    <span>📅 Created: <span x-text="formatTime(session.created)"></span></span>
+                                    <span>🔄 Modified: <span x-text="formatTime(session.modified)"></span></span>
                                 </div>
                             </div>
                             <div class="flex items-center gap-2">
@@ -461,7 +459,7 @@ function generateHTML(data: TimelineData): string {
                                         class="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm hover:bg-blue-200 transition-colors">
                                     📖 View Chat
                                 </button>
-                                <span class="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm">
+                                <span class="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium">
                                     <span x-text="session.projects.reduce((sum, p) => sum + p.timelines.length, 0)"></span> timelines
                                 </span>
                                 <svg :class="activeSession === idx ? 'rotate-180' : ''"
@@ -474,39 +472,39 @@ function generateHTML(data: TimelineData): string {
                     </div>
                     
                     <!-- Session Content -->
-                    <div x-show="activeSession === idx" x-cloak class="border-t p-6">
+                    <div x-show="activeSession === idx" x-cloak class="p-4 bg-gray-50">
                         <template x-if="session.projects && session.projects.length > 0">
-                            <div class="space-y-6">
+                            <div class="space-y-3">
                                 <template x-for="(project, pIdx) in session.projects" :key="project.projectPath">
-                                    <div class="bg-gray-50 rounded-lg p-4">
-                                        <h4 class="font-semibold mb-3">
+                                    <div class="bg-white rounded-lg border border-gray-200 p-3">
+                                        <h4 class="font-semibold mb-2 text-gray-700 text-sm">
                                             📂 <span x-text="project.projectName"></span>
                                             <span class="text-xs text-gray-500 font-mono ml-2" x-text="project.projectPath"></span>
                                         </h4>
-                                        <div class="space-y-3">
+                                        <div class="space-y-1 ml-2">
                                             <template x-for="(timeline, tIdx) in project.timelines" :key="timeline.hash">
-                                                <div class="bg-white rounded-lg p-3 ml-4">
+                                                <div class="bg-gray-50 border-l-2 border-green-400 rounded-r p-2 hover:bg-gray-100 transition-colors">
                                                     <div class="flex items-start justify-between">
                                                         <div class="flex-1">
-                                                            <p class="text-sm text-gray-500">⏰ <span x-text="timeline.time"></span></p>
-                                                            <h5 class="font-medium" x-text="timeline.message"></h5>
-                                                            <div class="flex items-center gap-4 mt-2 text-sm">
+                                                            <p class="text-xs text-gray-500">⏰ <span x-text="timeline.time"></span></p>
+                                                            <h5 class="text-sm font-medium text-gray-800 mb-1" x-text="timeline.message"></h5>
+                                                            <div class="flex items-center gap-2 text-xs">
                                                                 <template x-if="timeline.stats">
-                                                                    <span>📁 <span x-text="timeline.stats.filesChanged"></span> files</span>
+                                                                    <span class="text-gray-600">📁 <span x-text="timeline.stats.filesChanged"></span> files</span>
                                                                 </template>
                                                                 <template x-if="timeline.stats">
-                                                                    <span class="text-green-600">+<span x-text="timeline.stats.additions"></span></span>
+                                                                    <span class="text-green-600 font-medium">+<span x-text="timeline.stats.additions"></span></span>
                                                                 </template>
                                                                 <template x-if="timeline.stats">
-                                                                    <span class="text-red-600">-<span x-text="timeline.stats.deletions"></span></span>
+                                                                    <span class="text-red-600 font-medium">-<span x-text="timeline.stats.deletions"></span></span>
                                                                 </template>
-                                                                <code class="text-xs bg-gray-200 px-2 py-1 rounded" x-text="timeline.shortHash"></code>
+                                                                <code class="bg-gray-200 px-2 py-0.5 rounded font-mono" x-text="timeline.shortHash"></code>
                                                                 <button @click.stop="(() => {
-                                                                    const cmd = 'timeline travel ' + (project.timelines.length - tIdx);
+                                                                    const cmd = 'timeline travel ' + timeline.shortHash;
                                                                     navigator.clipboard.writeText(cmd);
                                                                     alert('Command copied: ' + cmd);
                                                                 })()"
-                                                                    class="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors">
+                                                                    class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors">
                                                                     Travel
                                                                 </button>
                                                             </div>
@@ -573,25 +571,30 @@ function generateLoadingHTML(): string {
                     <h1 class="text-4xl md:text-5xl font-bold text-center">Timeline</h1>
                     <div class="text-center mt-4">
                         <p class="text-sm">📂 <span x-text="sessions.length"></span> Sessions • ⏰ <span x-text="totalTimelines"></span> Timelines</p>
+                        <button @click="reload()" 
+                                class="mt-2 px-3 py-1 bg-white/20 hover:bg-white/30 rounded-full text-xs text-white transition-colors">
+                            🔄 Reload
+                        </button>
+                        <span class="text-xs text-white/80 block mt-1" x-show="streamProgress > 0 && streamProgress < 100">
+                            Loading... <span x-text="streamProgress"></span>%
+                        </span>
                     </div>
                 </div>
             </div>
             
             <!-- Sessions List -->
-            <div class="space-y-0">
+            <div class="space-y-2">
                 <template x-for="(session, idx) in sessions" :key="session.id">
-                    <div class="bg-white rounded-xl shadow-lg overflow-hidden">
+                    <div class="border border-gray-200 rounded-lg bg-white shadow-sm hover:shadow-md transition-shadow">
                         <div @click="activeSession = activeSession === idx ? -1 : idx"
-                             class="p-6 cursor-pointer hover:bg-gray-50 transition-colors">
+                             class="p-4 cursor-pointer hover:bg-gray-50 transition-colors border-b border-gray-100">
                             <div class="flex items-center justify-between">
                                 <div class="flex-1">
-                                    <h3 class="text-lg font-semibold">Session #<span x-text="idx + 1"></span></h3>
-                                    <p class="text-xs text-gray-500 font-mono" x-text="session.id"></p>
-                                    <div class="text-xs text-gray-500 space-y-1 mt-1">
-                                        <p>
-                                          📅 Created: <span x-text="formatTime(session.created)"></span>
-                                          🔄 Modified: <span x-text="formatTime(session.modified)"></span>
-                                        </p>
+                                    <h3 class="text-lg font-semibold text-gray-800">Session #<span x-text="idx + 1"></span></h3>
+                                    <p class="text-xs text-gray-500 font-mono mt-1" x-text="session.id"></p>
+                                    <div class="text-xs text-gray-500 mt-2 flex gap-4">
+                                        <span>📅 Created: <span x-text="formatTime(session.created)"></span></span>
+                                        <span>🔄 Modified: <span x-text="formatTime(session.modified)"></span></span>
                                     </div>
                                 </div>
                                 <div class="flex items-center gap-2">
@@ -599,42 +602,52 @@ function generateLoadingHTML(): string {
                                             class="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm hover:bg-blue-200 transition-colors">
                                         📖 Resume
                                     </button>
-                                    <span class="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm">
+                                    <span class="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium">
                                         <span x-text="session.projects?.reduce((sum, p) => sum + p.timelines.length, 0) || 0"></span> timelines
                                     </span>
+                                    <svg :class="activeSession === idx ? 'rotate-180' : ''"
+                                         class="w-6 h-6 text-gray-400 transition-transform"
+                                         fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                    </svg>
                                 </div>
                             </div>
                         </div>
                         
                         <!-- Expanded content -->
-                        <div x-show="activeSession === idx" x-collapse class="border-t p-6">
+                        <div x-show="activeSession === idx" x-collapse class="p-4 bg-gray-50">
                             <template x-if="session.projects && session.projects.length > 0">
-                                <div class="space-y-0">
+                                <div class="space-y-3">
                                     <template x-for="(project, pIdx) in session.projects" :key="project.projectPath">
-                                        <div class="bg-gray-50 rounded-lg p-4">
-                                            <h4 class="font-semibold mb-3">
+                                        <div class="bg-white rounded-lg border border-gray-200 p-3">
+                                            <h4 class="font-semibold mb-2 text-gray-700 text-sm">
                                                 📂 <span x-text="project.projectName"></span>
                                             </h4>
-                                            <div class="space-y-2">
+                                            <div class="space-y-1 ml-2">
                                                 <template x-for="(timeline, tIdx) in project.timelines" :key="timeline.hash">
-                                                    <div class="bg-white rounded p-3 flex items-center justify-between">
-                                                        <div class="flex-1">
-                                                            <p class="text-sm font-medium" x-text="timeline.message"></p>
-                                                            <p class="text-xs text-gray-500">
-                                                                <span x-text="timeline.time"></span> • 
-                                                                <code x-text="timeline.shortHash"></code>
-                                                            </p>
+                                                    <div class="bg-gray-50 border-l-2 border-green-400 rounded-r p-2 hover:bg-gray-100 transition-colors">
+                                                        <div class="flex items-center justify-between">
+                                                            <div class="flex-1">
+                                                                <p class="text-sm font-medium text-gray-800" x-text="timeline.message"></p>
+                                                                <p class="text-xs text-gray-500 mt-1">
+                                                                    <span x-text="timeline.time"></span> • 
+                                                                    <code class="font-mono" x-text="timeline.shortHash"></code>
+                                                                </p>
+                                                            </div>
+                                                            <button @click="showTravelModal(timeline.shortHash)"
+                                                                    class="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs hover:bg-purple-200">
+                                                                ⏮ Travel
+                                                            </button>
                                                         </div>
-                                                        <button @click="showTravelModal(timeline.branch, project.timelines.length - tIdx)"
-                                                                class="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs hover:bg-purple-200">
-                                                            ⏮ Travel
-                                                        </button>
                                                     </div>
                                                 </template>
                                             </div>
                                         </div>
                                     </template>
                                 </div>
+                            </template>
+                            <template x-if="!session.projects || session.projects.length === 0">
+                                <p class="text-center text-gray-500 py-8">No timelines in this session for this project</p>
                             </template>
                         </div>
                     </div>
@@ -684,6 +697,7 @@ function generateLoadingHTML(): string {
             modalDescription: '',
             copied: false,
             copyTimer: null,
+            streamProgress: 0,
             
             formatTime(timestamp) {
                 if (!timestamp || timestamp === 'Unknown') return 'Unknown';
@@ -702,10 +716,10 @@ function generateLoadingHTML(): string {
                 }
             },
             
-            showTravelModal(branch, number) {
+            showTravelModal(commitHash) {
                 this.modalTitle = '⏮ Travel to Timeline';
-                this.modalCommand = 'timeline travel ' + number;
-                this.modalDescription = 'This will restore your working directory to timeline ' + number + ' on branch ' + branch + '.';
+                this.modalCommand = 'timeline travel ' + commitHash;
+                this.modalDescription = 'This will restore your working directory to commit ' + commitHash + '.';
                 this.modalVisible = true;
                 this.copied = false;
                 if (this.copyTimer) {
@@ -732,40 +746,134 @@ function generateLoadingHTML(): string {
                 }, 2000);
             },
             
-            async loadData() {
+            async loadDataStreaming() {
+                // Use streaming JSONL endpoint for progressive loading
                 try {
-                    // Poll for data with loading status updates
-                    const pollForData = async () => {
-                        const response = await fetch('/api/timeline-data');
-                        const data = await response.json();
-                        
-                        if (data.loading) {
-                            // Still loading, check status
-                            const statusResponse = await fetch('/api/status');
-                            const status = await statusResponse.json();
-                            
-                            // Update loading message with progress
-                            const progressBar = status.totalSteps > 0 
-                                ? '[' + status.progress + '/' + status.totalSteps + ']' 
-                                : '';
-                            // Update the Alpine.js data property
-                            this.loadingMessage = progressBar + ' ' + status.message;
-                            
-                            // Poll again in 500ms
-                            setTimeout(() => pollForData(), 500);
-                        } else {
-                            // Data ready, update UI
-                            this.sessions = data.sessions || [];
-                            this.totalTimelines = data.totalTimelines || 0;
-                            this.loading = false;
-                        }
-                    };
+                    const response = await fetch('/api/timeline-stream');
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
                     
-                    await pollForData();
+                    const sessionsMap = new Map();
+                    
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\\n');
+                        buffer = lines.pop() || ''; // Keep incomplete line in buffer
+                        
+                        for (const line of lines) {
+                            if (!line.trim()) continue;
+                            
+                            try {
+                                const event = JSON.parse(line);
+                                
+                                switch (event.type) {
+                                    case 'status':
+                                        this.loadingMessage = event.data.message;
+                                        break;
+                                        
+                                    case 'info':
+                                        this.totalTimelines = event.data.totalTimelines;
+                                        this.loadingMessage = 'Loading ' + event.data.totalTimelines + ' timelines from branch ' + event.data.branch + '...';
+                                        break;
+                                        
+                                    case 'progress':
+                                        this.streamProgress = Math.round((event.data.processed / event.data.total) * 100);
+                                        this.loadingMessage = event.data.message + ' [' + this.streamProgress + '%]';
+                                        break;
+                                        
+                                    case 'timelines':
+                                        // Process incoming timelines chunk
+                                        for (const timeline of event.data) {
+                                            if (timeline.sessionId) {
+                                                if (!sessionsMap.has(timeline.sessionId)) {
+                                                    sessionsMap.set(timeline.sessionId, {
+                                                        id: timeline.sessionId,
+                                                        timelines: [],
+                                                        projects: []
+                                                    });
+                                                }
+                                                sessionsMap.get(timeline.sessionId).timelines.push(timeline);
+                                            }
+                                        }
+                                        
+                                        // Update UI with partial data
+                                        this.updateSessionsFromMap(sessionsMap);
+                                        this.loading = false; // Show data as it arrives
+                                        break;
+                                        
+                                    case 'complete':
+                                        this.loadingMessage = event.data.message;
+                                        this.loading = false;
+                                        break;
+                                        
+                                    case 'error':
+                                        console.error('Stream error:', event.data.message);
+                                        this.loadingMessage = 'Error: ' + event.data.message;
+                                        break;
+                                }
+                            } catch (e) {
+                                console.error('Failed to parse line:', line, e);
+                            }
+                        }
+                    }
                 } catch (error) {
                     console.error('Failed to load timeline data:', error);
+                    this.loadingMessage = 'Failed to load timeline data';
                     this.loading = false;
                 }
+            },
+            
+            updateSessionsFromMap(sessionsMap) {
+                // Convert sessions map to array and organize by project
+                const sessions = Array.from(sessionsMap.values()).map(session => {
+                    // Group timelines by project
+                    const projectsMap = new Map();
+                    
+                    for (const timeline of session.timelines) {
+                        const projectPath = timeline.projectPath || process.cwd();
+                        const projectName = projectPath.split('/').pop() || 'Unknown';
+                        
+                        if (!projectsMap.has(projectPath)) {
+                            projectsMap.set(projectPath, {
+                                projectPath,
+                                projectName,
+                                timelines: []
+                            });
+                        }
+                        projectsMap.get(projectPath).timelines.push(timeline);
+                    }
+                    
+                    return {
+                        ...session,
+                        projects: Array.from(projectsMap.values()),
+                        created: session.timelines[0]?.date || 'Unknown',
+                        modified: session.timelines[session.timelines.length - 1]?.date || 'Unknown'
+                    };
+                });
+                
+                // Sort sessions by most recent first
+                this.sessions = sessions.sort((a, b) => {
+                    const dateA = new Date(a.modified).getTime();
+                    const dateB = new Date(b.modified).getTime();
+                    return dateB - dateA;
+                });
+            },
+            
+            async loadData() {
+                // Always use streaming for progressive loading
+                await this.loadDataStreaming();
+            },
+            
+            reload() {
+                this.loading = true;
+                this.sessions = [];
+                this.streamProgress = 0;
+                this.loadingMessage = 'Reloading...';
+                this.loadData();
             }
         }
     }
@@ -898,6 +1006,105 @@ async function viewCommand() {
             status: loadingStatus
           }), { headers });
         }
+      }
+      
+      // Streaming JSONL endpoint for progressive loading
+      if (url.pathname === '/api/timeline-stream') {
+        // Create a readable stream that sends data as JSONL
+        const stream = new ReadableStream({
+          async start(controller) {
+            const encoder = new TextEncoder();
+            
+            // Send initial status
+            controller.enqueue(encoder.encode(JSON.stringify({ type: 'status', data: { loading: true, message: 'Starting timeline scan...' } }) + '\n'));
+            
+            try {
+              const branch = await getCurrentBranch();
+              const timelines = await getAllTimelines(branch);
+              const sessionsMap = new Map<string, Session>();
+              
+              // Send total count
+              controller.enqueue(encoder.encode(JSON.stringify({ 
+                type: 'info', 
+                data: { totalTimelines: timelines.length, branch } 
+              }) + '\n'));
+              
+              // Process timelines in chunks for streaming
+              const chunkSize = 5;
+              for (let i = 0; i < timelines.length; i += chunkSize) {
+                const chunk = timelines.slice(i, Math.min(i + chunkSize, timelines.length));
+                
+                // Process chunk
+                const chunkData = await Promise.all(
+                  chunk.map(async (timeline) => {
+                    const metadata = await getTimelineMetadata(timeline);
+                    if (!metadata.hash) return null;
+                    
+                    const shortHash = metadata.hash.substring(0, 7);
+                    const [date, time, message] = await Promise.all([
+                      $`git log -1 --format=%cd --date=short ${metadata.hash}`.text().then(t => t.trim()),
+                      $`git log -1 --format=%cr ${metadata.hash}`.text().then(t => t.trim()),
+                      $`git log -1 --format=%s ${metadata.hash}`.text().then(m => m.trim())
+                    ]);
+                    
+                    return {
+                      branch: timeline,
+                      hash: metadata.hash,
+                      shortHash,
+                      time,
+                      date,
+                      message: message || 'No message',
+                      sessionId: metadata.sessionId,
+                      projectPath: metadata.projectPath
+                    };
+                  })
+                );
+                
+                // Stream this chunk
+                const validChunkData = chunkData.filter(Boolean);
+                if (validChunkData.length > 0) {
+                  controller.enqueue(encoder.encode(JSON.stringify({ 
+                    type: 'timelines', 
+                    data: validChunkData,
+                    progress: Math.min(100, Math.round((i + chunk.length) / timelines.length * 100))
+                  }) + '\n'));
+                }
+                
+                // Update progress
+                controller.enqueue(encoder.encode(JSON.stringify({ 
+                  type: 'progress', 
+                  data: { 
+                    processed: Math.min(i + chunk.length, timelines.length),
+                    total: timelines.length,
+                    message: `Processing timeline ${Math.min(i + chunk.length, timelines.length)} of ${timelines.length}...`
+                  }
+                }) + '\n'));
+              }
+              
+              // Send completion
+              controller.enqueue(encoder.encode(JSON.stringify({ 
+                type: 'complete', 
+                data: { message: 'Timeline loading complete' } 
+              }) + '\n'));
+              
+            } catch (error) {
+              controller.enqueue(encoder.encode(JSON.stringify({ 
+                type: 'error', 
+                data: { message: error instanceof Error ? error.message : String(error) } 
+              }) + '\n'));
+            } finally {
+              controller.close();
+            }
+          }
+        });
+        
+        return new Response(stream, {
+          headers: {
+            'Content-Type': 'application/x-ndjson',
+            'Cache-Control': 'no-cache',
+            'Transfer-Encoding': 'chunked'
+          }
+        });
       }
       
       return new Response('Not found', { status: 404 });

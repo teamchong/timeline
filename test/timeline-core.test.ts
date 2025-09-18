@@ -145,3 +145,80 @@ test('cleanup executes without error', async () => {
   // Run cleanup (should not crash)
   await expect(cleanup()).resolves.toBeUndefined();
 });
+
+test('save does not create index.lock in .git directory', async () => {
+  const { save } = await import('../src/timeline-core.ts');
+  const { existsSync } = await import('fs');
+  
+  // Create changes
+  await writeFile(join(testDir, 'test.txt'), 'content');
+  
+  // Save timeline
+  await save();
+  
+  // Check that no index.lock exists in .git
+  const indexLockPath = join(testDir, '.git', 'index.lock');
+  expect(existsSync(indexLockPath)).toBe(false);
+});
+
+test('concurrent saves do not create lock conflicts', async () => {
+  const { save } = await import('../src/timeline-core.ts');
+  const { existsSync } = await import('fs');
+  
+  // Create initial change
+  await writeFile(join(testDir, 'concurrent.txt'), 'initial');
+  
+  // Run multiple saves concurrently
+  const saves = [];
+  for (let i = 0; i < 5; i++) {
+    saves.push(save());
+  }
+  
+  // All should complete without error
+  await expect(Promise.all(saves)).resolves.toBeDefined();
+  
+  // No index.lock should remain
+  const indexLockPath = join(testDir, '.git', 'index.lock');
+  expect(existsSync(indexLockPath)).toBe(false);
+});
+
+test('save uses temporary index and cleans up', async () => {
+  const { save } = await import('../src/timeline-core.ts');
+  const { readdirSync } = await import('fs');
+  
+  // Get initial temp files
+  const tmpFiles = readdirSync('/tmp').filter(f => f.startsWith('timeline-index-'));
+  const initialCount = tmpFiles.length;
+  
+  // Create change and save
+  await writeFile(join(testDir, 'temp-test.txt'), 'content');
+  await save();
+  
+  // Check temp files are cleaned up
+  const afterFiles = readdirSync('/tmp').filter(f => f.startsWith('timeline-index-'));
+  expect(afterFiles.length).toBe(initialCount);
+});
+
+test('travel works with commit hash', async () => {
+  const { save, travel } = await import('../src/timeline-core.ts');
+  
+  // Create initial timeline
+  await writeFile(join(testDir, 'hash-test.txt'), 'version 1');
+  await save();
+  
+  // Get the commit hash of the timeline
+  const branches = await git(['branch', '--list', 'timelines/*'], testDir);
+  const timelineBranch = branches.split('\n')[0].trim();
+  const hash = await git(['rev-parse', '--short', timelineBranch], testDir);
+  
+  // Make another change
+  await writeFile(join(testDir, 'hash-test.txt'), 'version 2');
+  
+  // Travel using commit hash
+  await expect(travel(hash)).resolves.toBeUndefined();
+  
+  // Verify file was restored
+  const { readFileSync } = await import('fs');
+  const content = readFileSync(join(testDir, 'hash-test.txt'), 'utf-8');
+  expect(content).toBe('version 1');
+});
