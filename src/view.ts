@@ -289,14 +289,16 @@ async function processSessionsParallel(
 
       for (const [timeline, metadata] of timelineCache) {
         if (metadata.sessionId === sessionId) {
-          // Create minimal timeline info (no git calls yet)
+          // Get actual timeline info from git
+          const timelineInfo = await getTimelineInfo(timeline);
+          
           const info: Timeline = {
             branch: timeline,
             hash: metadata.hash,
             shortHash: metadata.hash.substring(0, 7),
-            time: 'Loading...', 
-            date: new Date().toISOString(), // Placeholder
-            message: 'Loading...',
+            time: timelineInfo.time,
+            date: timelineInfo.date,
+            message: timelineInfo.message,
             sessionId: metadata.sessionId,
           };
           sessionTimelines.push(info);
@@ -433,7 +435,7 @@ function generateHTML(data: TimelineData): string {
         </div>
 
         <!-- Sessions List -->
-        <div class="space-y-4">
+        <div class="space-y-0">
             <template x-for="(session, idx) in sessions" :key="session.id">
                 <div class="bg-white rounded-xl shadow-lg overflow-hidden">
                     <!-- Session Header -->
@@ -444,8 +446,10 @@ function generateHTML(data: TimelineData): string {
                                 <h3 class="text-lg font-semibold">Session #<span x-text="idx + 1"></span></h3>
                                 <p class="text-xs text-gray-500 font-mono" x-text="session.id"></p>
                                 <div class="text-xs text-gray-500 space-y-1">
-                                    <p>📅 Created: <span x-text="formatTime(session.created)"></span></p>
-                                    <p>🔄 Modified: <span x-text="formatTime(session.modified)"></span></p>
+                                    <p>
+                                      📅 Created: <span x-text="formatTime(session.created)"></span>
+                                      🔄 Modified: <span x-text="formatTime(session.modified)"></span>
+                                    </p>
                                 </div>
                             </div>
                             <div class="flex items-center gap-2">
@@ -574,7 +578,7 @@ function generateLoadingHTML(): string {
             </div>
             
             <!-- Sessions List -->
-            <div class="space-y-4">
+            <div class="space-y-0">
                 <template x-for="(session, idx) in sessions" :key="session.id">
                     <div class="bg-white rounded-xl shadow-lg overflow-hidden">
                         <div @click="activeSession = activeSession === idx ? -1 : idx"
@@ -584,8 +588,10 @@ function generateLoadingHTML(): string {
                                     <h3 class="text-lg font-semibold">Session #<span x-text="idx + 1"></span></h3>
                                     <p class="text-xs text-gray-500 font-mono" x-text="session.id"></p>
                                     <div class="text-xs text-gray-500 space-y-1 mt-1">
-                                        <p>📅 Created: <span x-text="formatTime(session.created)"></span></p>
-                                        <p>🔄 Modified: <span x-text="formatTime(session.modified)"></span></p>
+                                        <p>
+                                          📅 Created: <span x-text="formatTime(session.created)"></span>
+                                          🔄 Modified: <span x-text="formatTime(session.modified)"></span>
+                                        </p>
                                     </div>
                                 </div>
                                 <div class="flex items-center gap-2">
@@ -603,7 +609,7 @@ function generateLoadingHTML(): string {
                         <!-- Expanded content -->
                         <div x-show="activeSession === idx" x-collapse class="border-t p-6">
                             <template x-if="session.projects && session.projects.length > 0">
-                                <div class="space-y-4">
+                                <div class="space-y-0">
                                     <template x-for="(project, pIdx) in session.projects" :key="project.projectPath">
                                         <div class="bg-gray-50 rounded-lg p-4">
                                             <h4 class="font-semibold mb-3">
