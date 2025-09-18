@@ -200,7 +200,7 @@ async function getTimelineDetails(branch: string): Promise<Timeline> {
     .filter(line => line)
     .map(line => {
       const [status, ...pathParts] = line.split(/\s+/);
-      return { status, path: pathParts.join(' ') };
+      return { status: status || '', path: pathParts.join(' ') };
     });
 
   return {
@@ -252,7 +252,7 @@ async function processSessionsParallel(
           // Find last line with timestamp (iterate backwards)
           for (let i = lines.length - 1; i >= 0; i--) {
             try {
-              const json = JSON.parse(lines[i]);
+              const json = JSON.parse(lines[i] || '{}');
               if (json.timestamp) {
                 modified = json.timestamp;
                 break;
@@ -650,8 +650,9 @@ function generateLoadingHTML(): string {
                            class="flex-1 px-3 py-2 border border-gray-300 rounded-md bg-gray-50 font-mono text-sm"
                            @click="$event.target.select()">
                     <button @click="copyCommand()"
-                            class="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600">
-                        📋 Copy
+                            class="px-4 py-2 rounded-md transition-all duration-200"
+                            :class="copied ? 'bg-green-500 hover:bg-green-600' : 'bg-blue-500 hover:bg-blue-600'"
+                            x-html="copied ? '✓ Copied' : '📋 Copy'">
                     </button>
                 </div>
             </div>
@@ -675,6 +676,7 @@ function generateLoadingHTML(): string {
             modalTitle: '',
             modalCommand: '',
             modalDescription: '',
+            copied: false,
             
             formatTime(timestamp) {
                 if (!timestamp || timestamp === 'Unknown') return 'Unknown';
@@ -697,8 +699,10 @@ function generateLoadingHTML(): string {
             
             copyCommand() {
                 navigator.clipboard.writeText(this.modalCommand);
-                // Optional: Show a toast notification
-                alert('Command copied to clipboard!');
+                this.copied = true;
+                setTimeout(() => {
+                    this.copied = false;
+                }, 2000);
             },
             
             async loadData() {
