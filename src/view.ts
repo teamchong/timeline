@@ -699,7 +699,8 @@ function generateLoadingHTML(): string {
             
             async loadData() {
                 try {
-                    const response = await fetch('http://localhost:8765/api/timeline-data');
+                    // Use relative URL since we're served from the same server
+                    const response = await fetch('/api/timeline-data');
                     const data = await response.json();
                     
                     // Update data directly (no innerHTML replacement)
