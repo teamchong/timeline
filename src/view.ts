@@ -679,8 +679,8 @@ function generateLoadingHTML(): string {
             
             showResumeModal(sessionId) {
                 this.modalTitle = '📖 Resume Session';
-                this.modalCommand = 'bun /Users/steven_chong/Downloads/repos/timeline/render-conversation.ts ' + sessionId;
-                this.modalDescription = 'This command will render the conversation history for this session.';
+                this.modalCommand = 'claude -r ' + sessionId;
+                this.modalDescription = 'This command will resume the Claude Code session.';
                 this.modalVisible = true;
             },
             
