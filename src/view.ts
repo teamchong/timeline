@@ -727,25 +727,22 @@ async function viewCommand() {
 
   const currentProjectPath = process.cwd();
 
-  // Write loading HTML immediately
-  const tempFile = `/tmp/timeline-view-${Date.now()}.html`;
-  await Bun.write(tempFile, generateLoadingHTML());
-  
-  // Open browser IMMEDIATELY with loading page
-  try {
-    await $`open ${tempFile}`.quiet();
-    console.log('🌐 Opening browser with loading page...');
-  } catch {
-    console.log('💡 Open the file in your browser to view');
-  }
-  
-  // Now start the server to handle data requests
+  // Start the server first to serve both HTML and data
   const server = Bun.serve({
-    port: 8765,
+    port: 0, // Use random available port
     async fetch(request) {
       const url = new URL(request.url);
       
-      // Enable CORS
+      // Serve the main HTML page
+      if (url.pathname === '/' || url.pathname === '/timeline') {
+        return new Response(generateLoadingHTML(), {
+          headers: {
+            'Content-Type': 'text/html',
+          },
+        });
+      }
+      
+      // Enable CORS for API requests
       const headers = {
         'Access-Control-Allow-Origin': '*',
         'Content-Type': 'application/json',
@@ -800,6 +797,16 @@ async function viewCommand() {
   
   console.log(`\n✅ Server running at http://localhost:${server.port}`);
   console.log('📊 Loading timeline data in background...');
+  
+  // Open browser to HTTP URL instead of file
+  const timelineUrl = `http://localhost:${server.port}`;
+  try {
+    await $`open ${timelineUrl}`.quiet();
+    console.log(`🌐 Opening browser at ${timelineUrl}...`);
+  } catch {
+    console.log(`💡 Open ${timelineUrl} in your browser to view the timeline`);
+  }
+  
   console.log('\nPress Ctrl+C to stop the server');
 }
 
