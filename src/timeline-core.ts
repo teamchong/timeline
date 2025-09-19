@@ -79,11 +79,32 @@ export async function save(): Promise<void> {
       process.exit(0);
     }
     
-    // Check for existing index.lock - if present, skip this snapshot
+    // Check for existing index.lock - if present, wait with exponential backoff
     const indexLockPath = join(gitDir.trim(), 'index.lock');
+    const maxRetries = 10;
+    const maxWaitTime = 5000; // Max 5 seconds total wait
+    let totalWaitTime = 0;
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      if (!existsSync(indexLockPath)) {
+        // Lock is gone, proceed
+        break;
+      }
+      
+      if (totalWaitTime >= maxWaitTime) {
+        // Waited too long, skip this snapshot
+        // This prevents hooks from hanging indefinitely
+        process.exit(0);
+      }
+      
+      // Exponential backoff: 50ms, 100ms, 200ms, 400ms...
+      const waitTime = Math.min(50 * Math.pow(2, attempt), 1000); // Cap at 1 second
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+      totalWaitTime += waitTime;
+    }
+    
+    // Final check - if still locked after all retries, skip
     if (existsSync(indexLockPath)) {
-      // Another git process is running, skip to avoid conflicts
-      // This is better than waiting/retrying when called as a hook
       process.exit(0);
     }
     
