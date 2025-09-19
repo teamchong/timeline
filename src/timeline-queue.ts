@@ -114,8 +114,7 @@ export async function processQueue() {
         const { save } = await import('./timeline-core');
         await save();
         
-        // Success! Don't add back to queue
-        console.log(`✅ Processed queued snapshot for ${snapshot.projectPath}`);
+        // Success! Don't add back to queue (silent operation)
         
       } catch (error) {
         // Failed, keep in queue with retry count
@@ -138,10 +137,8 @@ export async function processQueue() {
       await Bun.$`rm -f ${QUEUE_FILE}`.quiet();
     }
     
-    // Log failed items (could write to a separate file)
-    if (failed.length > 0) {
-      console.warn(`⚠️ ${failed.length} snapshots failed after max retries`);
-    }
+    // Silently drop failed items after max retries
+    // (could write to a separate file if needed for debugging)
     
   } finally {
     // Remove lock
@@ -149,28 +146,5 @@ export async function processQueue() {
   }
 }
 
-// CLI interface
-if (import.meta.main) {
-  const command = process.argv[2];
-  
-  switch (command) {
-    case 'process':
-      await processQueue();
-      break;
-    case 'status':
-      if (existsSync(QUEUE_FILE)) {
-        const content = await readFile(QUEUE_FILE, 'utf-8');
-        const count = content.split('\n').filter(Boolean).length;
-        console.log(`📊 ${count} snapshots in queue`);
-      } else {
-        console.log('📊 Queue is empty');
-      }
-      break;
-    default:
-      console.log(`Timeline Queue Manager
-
-Commands:
-  process - Process queued snapshots once
-  status  - Show queue status`);
-  }
-}
+// This module is now used internally by timeline-core.ts
+// No CLI interface needed - everything happens automatically

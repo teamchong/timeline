@@ -2,6 +2,7 @@
 
 import { existsSync } from 'fs';
 import { join } from 'path';
+import { enqueueSnapshot, processQueue } from './timeline-queue';
 
 // Utility function for safe command execution that prevents zombies
 async function execCommand(cmd: string[], options: any = {}): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -103,9 +104,22 @@ export async function save(): Promise<void> {
       totalWaitTime += waitTime;
     }
     
-    // Final check - if still locked after all retries, skip
+    // Final check - if still locked after all retries, queue for later
     if (existsSync(indexLockPath)) {
+      // Silently queue this snapshot for later processing
+      await enqueueSnapshot({
+        timestamp: Date.now(),
+        projectPath: process.cwd(),
+        branch: await getCurrentBranch(),
+      });
       process.exit(0);
+    }
+    
+    // Process any queued snapshots first (silently, no output)
+    try {
+      await processQueue();
+    } catch (error) {
+      // Ignore queue processing errors - continue with current snapshot
     }
     
     const branch = await getCurrentBranch();
