@@ -21,28 +21,38 @@ interface QueuedSnapshot {
 
 // Ensure queue directory exists
 async function ensureQueueDir() {
-  if (!existsSync(QUEUE_DIR)) {
-    await mkdir(QUEUE_DIR, { recursive: true });
+  try {
+    if (!existsSync(QUEUE_DIR)) {
+      await mkdir(QUEUE_DIR, { recursive: true });
+    }
+  } catch (error) {
+    // Silently fail - we don't want to interrupt the user's workflow
+    // Queue feature will be skipped but main functionality continues
   }
 }
 
 // Add a snapshot request to the queue
 export async function enqueueSnapshot(snapshot: Omit<QueuedSnapshot, 'retries'>) {
-  await ensureQueueDir();
-  
-  const entry: QueuedSnapshot = {
-    ...snapshot,
-    retries: 0
-  };
-  
-  // Append to queue file (JSONL format)
-  const line = JSON.stringify(entry) + '\n';
-  
-  if (existsSync(QUEUE_FILE)) {
-    const content = await readFile(QUEUE_FILE, 'utf-8');
-    await writeFile(QUEUE_FILE, content + line);
-  } else {
-    await writeFile(QUEUE_FILE, line);
+  try {
+    await ensureQueueDir();
+    
+    const entry: QueuedSnapshot = {
+      ...snapshot,
+      retries: 0
+    };
+    
+    // Append to queue file (JSONL format)
+    const line = JSON.stringify(entry) + '\n';
+    
+    if (existsSync(QUEUE_FILE)) {
+      const content = await readFile(QUEUE_FILE, 'utf-8');
+      await writeFile(QUEUE_FILE, content + line);
+    } else {
+      await writeFile(QUEUE_FILE, line);
+    }
+  } catch (error) {
+    // Silently fail - queue feature is optional
+    // Main timeline functionality continues without disruption
   }
 }
 
