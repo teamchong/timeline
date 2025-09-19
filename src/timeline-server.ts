@@ -52,8 +52,11 @@ export async function startServer(port: number = DEFAULT_PORT): Promise<void> {
   const status = await isServerRunning();
   
   if (status.running) {
-    // Server already running, just return silently
-    return;
+    // Stop existing server first
+    console.log(`🔄 Restarting server on port ${port}...`);
+    await stopServer(true); // silent mode
+    // Give it a moment to fully stop
+    await new Promise(resolve => setTimeout(resolve, 500));
   }
 
   // Start the server in background
@@ -81,11 +84,13 @@ export async function startServer(port: number = DEFAULT_PORT): Promise<void> {
 }
 
 // Stop the timeline server
-export async function stopServer(): Promise<void> {
+export async function stopServer(silent: boolean = false): Promise<void> {
   const status = await isServerRunning();
   
   if (!status.running) {
-    console.log('❌ Timeline server is not running');
+    if (!silent) {
+      console.log('❌ Timeline server is not running');
+    }
     return;
   }
 
@@ -93,17 +98,25 @@ export async function stopServer(): Promise<void> {
     process.kill(status.pid!, 'SIGTERM');
     await unlink(PID_FILE).catch(() => {});
     await unlink(PORT_FILE).catch(() => {});
-    console.log(`✅ Timeline server stopped (was PID: ${status.pid})`);
+    if (!silent) {
+      console.log(`✅ Timeline server stopped (was PID: ${status.pid})`);
+    }
   } catch (error) {
-    console.error('❌ Failed to stop server:', error);
+    if (!silent) {
+      console.error('❌ Failed to stop server:', error);
+    }
     // Try force kill
     try {
       process.kill(status.pid!, 'SIGKILL');
       await unlink(PID_FILE).catch(() => {});
       await unlink(PORT_FILE).catch(() => {});
-      console.log('✅ Timeline server force stopped');
+      if (!silent) {
+        console.log('✅ Timeline server force stopped');
+      }
     } catch {
-      console.error('❌ Could not stop server. You may need to kill it manually.');
+      if (!silent) {
+        console.error('❌ Could not stop server. You may need to kill it manually.');
+      }
     }
   }
 }
