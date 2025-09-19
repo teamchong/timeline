@@ -864,7 +864,24 @@ function generateLoadingHTML(): string {
             },
             
             async loadData() {
-                // Always use streaming for progressive loading
+                // First try to load full data, fallback to streaming
+                try {
+                    const response = await fetch('/api/timeline-data');
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data && data.sessions) {
+                            this.sessions = data.sessions;
+                            this.totalTimelines = data.totalTimelines || 0;
+                            this.loading = false;
+                            this.loadingMessage = 'Timeline loaded';
+                            return;
+                        }
+                    }
+                } catch (error) {
+                    console.error('Failed to load full data, falling back to streaming:', error);
+                }
+                
+                // Fallback to streaming
                 await this.loadDataStreaming();
             },
             
