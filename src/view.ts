@@ -883,13 +883,14 @@ function generateLoadingHTML(): string {
 }
 
 // Command handlers
-async function viewCommand() {
+async function viewCommand(customPort?: number, openBrowser: boolean = true) {
   if (!(await isGitRepo())) {
     console.error('❌ Not in a git repository');
     process.exit(1);
   }
 
   const currentProjectPath = process.cwd();
+  const port = customPort || 8888;
   
   // Cache for timeline data
   let cachedData: any = null;
@@ -970,7 +971,7 @@ async function viewCommand() {
 
   // Start the server with cached data support
   const server = Bun.serve({
-    port: 0, // Use random available port
+    port: port, // Use custom port or 8888
     async fetch(request) {
       const url = new URL(request.url);
       
@@ -1116,14 +1117,22 @@ async function viewCommand() {
   
   // Open browser to HTTP URL instead of file
   const timelineUrl = `http://localhost:${server.port}`;
-  try {
-    await $`open ${timelineUrl}`.quiet();
-    console.log(`🌐 Opening browser at ${timelineUrl}...`);
-  } catch {
-    console.log(`💡 Open ${timelineUrl} in your browser to view the timeline`);
+  
+  if (openBrowser) {
+    try {
+      await $`open ${timelineUrl}`.quiet();
+      console.log(`🌐 Opening browser at ${timelineUrl}...`);
+    } catch {
+      console.log(`💡 Open ${timelineUrl} in your browser to view the timeline`);
+    }
   }
   
-  console.log('\nPress Ctrl+C to stop the server');
+  if (!openBrowser) {
+    // Running as background server, don't show Ctrl+C message
+    console.log(`📡 Server running in background mode`);
+  } else {
+    console.log('\nPress Ctrl+C to stop the server');
+  }
 }
 
 async function saveCommand() {
@@ -1143,6 +1152,20 @@ const args = Bun.argv.slice(3);
 switch (command) {
   case 'view':
     await viewCommand();
+    break;
+  case 'serve':
+    // Parse port from args (--port=8888 or --port 8888)
+    let port = 8888;
+    for (let i = 0; i < args.length; i++) {
+      if (args[i].startsWith('--port=')) {
+        port = parseInt(args[i].split('=')[1]);
+      } else if (args[i] === '--port' && i + 1 < args.length) {
+        port = parseInt(args[i + 1]);
+      }
+    }
+    
+    // Run viewCommand with custom port (it already creates a server)
+    await viewCommand(port, false); // false = don't open browser
     break;
   case 'save':
     await saveCommand();

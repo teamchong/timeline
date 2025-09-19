@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import * as timeline from './timeline-core';
+import { startServer, stopServer, serverStatus, openBrowser } from './timeline-server';
 
 const VERSION = '2.0.0';
 
@@ -18,7 +19,10 @@ Usage: timeline <command> [options]
 
 Commands:
   save              Create a manual snapshot
-  view              Generate and open timeline view (fast ~3s)
+  view              Open timeline in browser (auto-starts server)
+  serve [port]      Start timeline server in background (default: 8888)
+  stop              Stop timeline server
+  status            Check if timeline server is running
   list              List all timelines
   travel [n|hash]   Travel to timeline by number or commit hash
   search <pattern>  Search across timelines
@@ -57,7 +61,20 @@ async function main() {
 
   switch (command) {
     case 'view':
-      await runView();
+      await openBrowser();
+      break;
+
+    case 'serve':
+      const port = args[1] ? parseInt(args[1]) : undefined;
+      await startServer(port);
+      break;
+
+    case 'stop':
+      await stopServer();
+      break;
+
+    case 'status':
+      await serverStatus();
       break;
 
     case 'save':
