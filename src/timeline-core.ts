@@ -152,7 +152,8 @@ export async function save(): Promise<void> {
   
   if (!sessionId) {
     // Try to get the most recently modified Claude session
-    const projectDir = `${process.env.HOME}/.claude/projects/-Users-steven-chong-Downloads-repos-timeline`;
+    const currentProjectPath = process.cwd().replace(/\//g, '-');
+    const projectDir = `${process.env.HOME}/.claude/projects/${currentProjectPath}`;
     try {
       // Use utility function to avoid zombies
       const { stdout } = await execShell(`ls -t ${projectDir}/*.jsonl 2>/dev/null | head -1`);
