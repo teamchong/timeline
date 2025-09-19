@@ -19,8 +19,7 @@ Usage: timeline <command> [options]
 
 Commands:
   save              Create a manual snapshot
-  view              Open timeline in browser (auto-starts server)
-  serve [port]      Start timeline server in background (default: 8888)
+  view              Start timeline server in background and open browser
   stop              Stop timeline server
   status            Check if timeline server is running
   list              List all timelines
@@ -33,7 +32,8 @@ Commands:
 
 Examples:
   timeline save                     # Create snapshot
-  timeline view                     # Generate timeline view
+  timeline view                     # Start server & open browser
+  timeline stop                     # Stop background server
   timeline list                     # Show all timelines
   timeline travel 3                 # Travel to timeline #3
   timeline search "function foo"    # Search in timelines
@@ -61,12 +61,9 @@ async function main() {
 
   switch (command) {
     case 'view':
+      // Start server in background and open browser
+      await startServer();
       await openBrowser();
-      break;
-
-    case 'serve':
-      const port = args[1] ? parseInt(args[1]) : undefined;
-      await startServer(port);
       break;
 
     case 'stop':

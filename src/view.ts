@@ -883,7 +883,7 @@ function generateLoadingHTML(): string {
 }
 
 // Command handlers
-async function viewCommand(customPort?: number, openBrowser: boolean = true) {
+async function viewCommand(customPort?: number, isBackground: boolean = false) {
   if (!(await isGitRepo())) {
     console.error('❌ Not in a git repository');
     process.exit(1);
@@ -1118,20 +1118,18 @@ async function viewCommand(customPort?: number, openBrowser: boolean = true) {
   // Open browser to HTTP URL instead of file
   const timelineUrl = `http://localhost:${server.port}`;
   
-  if (openBrowser) {
+  if (!isBackground) {
+    // Interactive mode - open browser and show Ctrl+C message
     try {
       await $`open ${timelineUrl}`.quiet();
       console.log(`🌐 Opening browser at ${timelineUrl}...`);
     } catch {
       console.log(`💡 Open ${timelineUrl} in your browser to view the timeline`);
     }
-  }
-  
-  if (!openBrowser) {
-    // Running as background server, don't show Ctrl+C message
-    console.log(`📡 Server running in background mode`);
-  } else {
     console.log('\nPress Ctrl+C to stop the server');
+  } else {
+    // Background mode - just log that server is ready
+    console.log(`📡 Server ready at ${timelineUrl}`);
   }
 }
 
@@ -1151,21 +1149,17 @@ const args = Bun.argv.slice(3);
 
 switch (command) {
   case 'view':
-    await viewCommand();
-    break;
-  case 'serve':
-    // Parse port from args (--port=8888 or --port 8888)
+    // Parse flags
     let port = 8888;
+    let isBackground = false;
     for (let i = 0; i < args.length; i++) {
-      if (args[i].startsWith('--port=')) {
+      if (args[i] === '--background') {
+        isBackground = true;
+      } else if (args[i].startsWith('--port=')) {
         port = parseInt(args[i].split('=')[1]);
-      } else if (args[i] === '--port' && i + 1 < args.length) {
-        port = parseInt(args[i + 1]);
       }
     }
-    
-    // Run viewCommand with custom port (it already creates a server)
-    await viewCommand(port, false); // false = don't open browser
+    await viewCommand(port, isBackground);
     break;
   case 'save':
     await saveCommand();

@@ -52,15 +52,14 @@ export async function startServer(port: number = DEFAULT_PORT): Promise<void> {
   const status = await isServerRunning();
   
   if (status.running) {
-    console.log(`✅ Timeline server already running on port ${status.port} (PID: ${status.pid})`);
-    console.log(`   View at: http://localhost:${status.port}`);
+    // Server already running, just return silently
     return;
   }
 
   // Start the server in background
   const viewPath = join(process.env.HOME!, 'Downloads/repos/timeline/src/view.ts');
   
-  const child = spawn('bun', [viewPath, 'serve', `--port=${port}`], {
+  const child = spawn('bun', [viewPath, 'view', '--background', `--port=${port}`], {
     detached: true,
     stdio: 'ignore',
   });
@@ -120,7 +119,7 @@ export async function serverStatus(): Promise<void> {
     console.log(`   URL: http://localhost:${status.port}`);
   } else {
     console.log('❌ Timeline server is not running');
-    console.log('   Start with: timeline serve');
+    console.log('   Start with: timeline view');
   }
 }
 
@@ -129,10 +128,8 @@ export async function openBrowser(): Promise<void> {
   const status = await isServerRunning();
   
   if (!status.running) {
-    // Start server first
-    await startServer();
-    // Give it a moment to start
-    await new Promise(resolve => setTimeout(resolve, 500));
+    console.error('❌ Server is not running. Start with: timeline view');
+    return;
   }
   
   const port = status.port || DEFAULT_PORT;
