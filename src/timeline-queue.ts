@@ -149,30 +149,11 @@ export async function processQueue() {
   }
 }
 
-// Run queue processor as a daemon
-export async function runDaemon() {
-  console.log('🚀 Timeline queue daemon started');
-  
-  while (true) {
-    try {
-      await processQueue();
-    } catch (error) {
-      console.error('Queue processing error:', error);
-    }
-    
-    // Wait 5 seconds before next check
-    await new Promise(resolve => setTimeout(resolve, 5000));
-  }
-}
-
 // CLI interface
 if (import.meta.main) {
   const command = process.argv[2];
   
   switch (command) {
-    case 'daemon':
-      await runDaemon();
-      break;
     case 'process':
       await processQueue();
       break;
@@ -189,8 +170,7 @@ if (import.meta.main) {
       console.log(`Timeline Queue Manager
 
 Commands:
-  daemon  - Run as background daemon
-  process - Process queue once
+  process - Process queued snapshots once
   status  - Show queue status`);
   }
 }
