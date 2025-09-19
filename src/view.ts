@@ -938,10 +938,9 @@ async function viewCommand(customPort?: number, isBackground: boolean = false) {
       loadingStatus.progress = 4;
       const sessions = await processSessionsParallel(relevantSessions, timelineMetadataCache);
       
-      // Filter to current project
-      const filteredSessions = sessions.filter(session => 
-        session.projects.some(p => p.projectPath === currentProjectPath)
-      );
+      // Don't filter - show all sessions for this project
+      // They're already from the current project's Claude directory
+      const filteredSessions = sessions;
       
       const totalTimelines = filteredSessions.reduce((sum, s) => 
         sum + s.projects.filter(p => p.projectPath === currentProjectPath)
