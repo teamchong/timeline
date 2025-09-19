@@ -71,10 +71,19 @@ async function getCurrentBranch(): Promise<string> {
 export async function save(): Promise<void> {
   try {
     // First check if we're in a git repository
+    let gitDir: string;
     try {
-      await git(['rev-parse', '--git-dir'], 2); // Retry once for lock issues
+      gitDir = await git(['rev-parse', '--git-dir'], 2); // Retry once for lock issues
     } catch (error) {
       // Not in a git repository - exit silently since this is called by hooks
+      process.exit(0);
+    }
+    
+    // Check for existing index.lock - if present, skip this snapshot
+    const indexLockPath = join(gitDir.trim(), 'index.lock');
+    if (existsSync(indexLockPath)) {
+      // Another git process is running, skip to avoid conflicts
+      // This is better than waiting/retrying when called as a hook
       process.exit(0);
     }
     
@@ -128,34 +137,82 @@ export async function save(): Promise<void> {
   const timestamp = new Date().toISOString();
   const message = `Timeline snapshot at ${timestamp}`;
   
-  // Create tree from current state using temporary index
-  // This matches the original bash implementation exactly
-  const tempIndex = `/tmp/timeline-index-${Date.now()}`;
+  // Create tree using pure object creation - never touches index!
   let tree: string;
   
   try {
-    // Set up temporary index
-    process.env.GIT_INDEX_FILE = tempIndex;
+    // Build tree entries without using index at all
+    // This approach uses ls-files for listing but creates objects directly
     
-    // Read HEAD into temporary index
-    await git(['read-tree', 'HEAD'], 2);
+    // Get list of tracked files with their modes
+    const trackedOutput = await git(['ls-files', '-s'], 2);
+    const untrackedOutput = await git(['ls-files', '--others', '--exclude-standard'], 2);
     
-    // Add all changes (tracked and untracked) to temporary index
-    // Using --all instead of -A to match original
-    await git(['add', '--all'], 2);
+    const entries: string[] = [];
     
-    // Create tree from temporary index
-    tree = await git(['write-tree'], 2);
+    // Process tracked files - hash their current working directory content
+    if (trackedOutput) {
+      for (const line of trackedOutput.split('\n').filter(Boolean)) {
+        // Format: <mode> <hash> <stage> <path>
+        const match = line.match(/^(\d+)\s+\w+\s+\d+\s+(.+)$/);
+        if (match) {
+          const [, mode, path] = match;
+          
+          if (existsSync(path)) {
+            // Hash the current working directory version of the file
+            const hash = await git(['hash-object', '-w', path], 2);
+            entries.push(`${mode} blob ${hash.trim()}\t${path}`);
+          }
+        }
+      }
+    }
     
-  } finally {
-    // Always clean up
-    delete process.env.GIT_INDEX_FILE;
+    // Process untracked files
+    if (untrackedOutput) {
+      for (const path of untrackedOutput.split('\n').filter(Boolean)) {
+        if (existsSync(path)) {
+          // Hash untracked file
+          const hash = await git(['hash-object', '-w', path], 2);
+          // Use standard file mode 100644
+          entries.push(`100644 blob ${hash.trim()}\t${path}`);
+        }
+      }
+    }
     
-    // Remove temporary index file
+    if (entries.length === 0) {
+      // No files to snapshot, use HEAD's tree
+      tree = await git(['rev-parse', 'HEAD^{tree}'], 2);
+    } else {
+      // Create tree object using mktree - this NEVER touches index
+      const proc = Bun.spawn(['git', 'mktree'], {
+        stdin: 'pipe',
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      
+      // Feed entries to mktree
+      proc.stdin.write(entries.sort().join('\n') + '\n');
+      proc.stdin.end();
+      
+      const [stdout, stderr] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      
+      await proc.exited;
+      
+      if (stderr && !stderr.includes('warning:')) {
+        throw new Error(`mktree error: ${stderr}`);
+      }
+      
+      tree = stdout.trim();
+    }
+  } catch (error) {
+    // If pure object creation fails, fall back to HEAD's tree
     try {
-      await execCommand(['rm', '-f', tempIndex]);
+      tree = await git(['rev-parse', 'HEAD^{tree}'], 2);
     } catch {
-      // Ignore cleanup errors
+      throw error;
     }
   }
   
